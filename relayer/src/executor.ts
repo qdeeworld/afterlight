@@ -1,0 +1,371 @@
+import type {
+  BudgetMutationResult,
+  BudgetReserveInput,
+  BudgetReserveResult,
+  BudgetSnapshot,
+  BudgetLookupResult,
+  ReservationState,
+} from "./budget.js";
+import type { RelayPlan } from "./core.js";
+import { SponsorshipError, authorizeSponsorship } from "./sponsorship.js";
+
+export type ExactSimulation = Readonly<
+  | { ok: true; callFingerprint: string; quotedFeeFri: string }
+  | { ok: false }
+>;
+
+export type ExactSubmission = Readonly<
+  | {
+      submitted: true;
+      transactionHash: string;
+      callFingerprint: string;
+      transactionMaxFeeFri: string;
+    }
+  | { submitted: false }
+>;
+
+export type ExactReceipt = Readonly<
+  | {
+      status: "accepted";
+      execution: "succeeded" | "reverted";
+      transactionHash: string;
+      callFingerprint: string;
+      actualFeeFri: string;
+    }
+  | { status: "pending" | "rejected" }
+>;
+
+/** The production signer/RPC implementation is intentionally not present in Phase A. */
+export interface StarknetRelayAdapter {
+  simulateExact(plan: RelayPlan): Promise<ExactSimulation>;
+  signAndSubmitExact(plan: RelayPlan, transactionMaxFeeFri: string): Promise<ExactSubmission>;
+  reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt>;
+  readRelayerBalance(): Promise<string>;
+}
+
+export interface BudgetCoordinator {
+  lookup(semanticKey: string): Promise<BudgetLookupResult>;
+  reserve(input: BudgetReserveInput): Promise<BudgetReserveResult>;
+  markSubmitted(
+    semanticKey: string,
+    exactFingerprint: string,
+    transactionHash: string,
+    nowMs: number,
+  ): Promise<BudgetMutationResult>;
+  release(
+    semanticKey: string,
+    exactFingerprint: string,
+    nowMs: number,
+  ): Promise<BudgetMutationResult>;
+  finalize(
+    semanticKey: string,
+    exactFingerprint: string,
+    transactionHash: string,
+    actualFeeFri: string,
+    execution: "succeeded" | "reverted",
+    nowMs: number,
+  ): Promise<BudgetMutationResult>;
+  snapshot(dayKey: string): Promise<BudgetSnapshot>;
+}
+
+export type ExecutorPolicy = Readonly<{
+  submitEnabled: boolean;
+  perCallCapFri: bigint;
+  dailyBudgetFri: bigint;
+  feeMarginBps: bigint;
+}>;
+
+export type ExecutionResult = Readonly<
+  | {
+      status: "accepted";
+      transactionHash: string;
+      actualFeeFri: string;
+      reservedTodayFri: string;
+      spentTodayFri: string;
+    }
+  | {
+      status: "duplicate";
+      state: Exclude<ReservationState, "released">;
+      transactionHash: string | null;
+    }
+>;
+
+export class ExecutorError extends Error {
+  readonly code:
+    | "submission_disabled"
+    | "simulation_failed"
+    | "simulation_mismatch"
+    | "fee_policy_rejected"
+    | "sponsorship_frozen"
+    | "sponsorship_invariant_breach"
+    | "submission_not_started"
+    | "submission_uncertain"
+    | "submission_mismatch"
+    | "receipt_unreconciled"
+    | "receipt_reverted"
+    | "signer_adapter_unavailable"
+    | "executor_config_incomplete";
+
+  constructor(code: ExecutorError["code"]) {
+    super(code);
+    this.name = "ExecutorError";
+    this.code = code;
+  }
+}
+
+export async function executeRelayPlan(
+  plan: RelayPlan,
+  policy: ExecutorPolicy,
+  adapter: StarknetRelayAdapter,
+  budget: BudgetCoordinator,
+  nowMs: number,
+): Promise<ExecutionResult> {
+  if (!policy.submitEnabled) throw new ExecutorError("submission_disabled");
+  const dayKey = utcDayKey(nowMs);
+  const prior = await budget.lookup(plan.semanticKey);
+  if (prior.outcome === "found" && prior.state !== "released") {
+    return duplicateResult(prior.state, prior.transactionHash);
+  }
+  if (prior.sponsorshipFrozen) throw new ExecutorError("sponsorship_frozen");
+
+  const simulation = await adapter.simulateExact(plan);
+  if (!simulation.ok) throw new ExecutorError("simulation_failed");
+  if (simulation.callFingerprint !== plan.fingerprint) {
+    throw new ExecutorError("simulation_mismatch");
+  }
+
+  let authorization;
+  try {
+    authorization = authorizeSponsorship(
+      strictDecimal(simulation.quotedFeeFri),
+      { spentTodayFri: 0n, reservedTodayFri: 0n },
+      {
+        perCallCapFri: policy.perCallCapFri,
+        dailyBudgetFri: policy.dailyBudgetFri,
+        feeMarginBps: policy.feeMarginBps,
+      },
+    );
+  } catch (error) {
+    if (error instanceof SponsorshipError) throw new ExecutorError("fee_policy_rejected");
+    throw error;
+  }
+
+  const maxFeeFri = authorization.transactionMaxFeeFri.toString();
+  const reservation = await budget.reserve({
+    dayKey,
+    semanticKey: plan.semanticKey,
+    exactFingerprint: plan.fingerprint,
+    maxFeeFri,
+    perCallCapFri: policy.perCallCapFri.toString(),
+    dailyBudgetFri: policy.dailyBudgetFri.toString(),
+    nowMs,
+  });
+  if (reservation.outcome !== "reserved") {
+    const raced = await budget.lookup(plan.semanticKey);
+    if (raced.outcome === "found" && raced.state !== "released") {
+      return duplicateResult(raced.state, raced.transactionHash);
+    }
+    return duplicateResult(stateFromDuplicate(reservation.outcome), null);
+  }
+
+  let submission: ExactSubmission;
+  try {
+    submission = await adapter.signAndSubmitExact(plan, maxFeeFri);
+  } catch {
+    // An unexpected transport failure may have occurred after broadcast. Keep
+    // the reservation until an operator reconciles the account nonce/receipt.
+    throw new ExecutorError("submission_uncertain");
+  }
+  if (!submission.submitted) {
+    await budget.release(plan.semanticKey, plan.fingerprint, nowMs);
+    throw new ExecutorError("submission_not_started");
+  }
+  if (
+    submission.callFingerprint !== plan.fingerprint ||
+    submission.transactionMaxFeeFri !== maxFeeFri ||
+    !isTransactionHash(submission.transactionHash)
+  ) {
+    // The adapter claims it submitted, so the exposure remains reserved.
+    throw new ExecutorError("submission_mismatch");
+  }
+  const submitted = await budget.markSubmitted(
+    plan.semanticKey,
+    plan.fingerprint,
+    submission.transactionHash,
+    nowMs,
+  );
+  if (submitted.outcome !== "submitted" && submitted.outcome !== "already_submitted") {
+    throw new ExecutorError("submission_uncertain");
+  }
+
+  let receipt: ExactReceipt;
+  try {
+    receipt = await adapter.reconcileReceipt(submission.transactionHash, plan);
+  } catch {
+    throw new ExecutorError("receipt_unreconciled");
+  }
+  if (receipt.status !== "accepted") {
+    throw new ExecutorError("receipt_unreconciled");
+  }
+  if (
+    receipt.transactionHash !== submission.transactionHash ||
+    receipt.callFingerprint !== plan.fingerprint
+  ) {
+    throw new ExecutorError("receipt_unreconciled");
+  }
+
+  let actualFee: bigint;
+  try {
+    actualFee = strictDecimal(receipt.actualFeeFri, true);
+  } catch {
+    throw new ExecutorError("receipt_unreconciled");
+  }
+  const finalized = await budget.finalize(
+    plan.semanticKey,
+    plan.fingerprint,
+    submission.transactionHash,
+    actualFee.toString(),
+    receipt.execution,
+    nowMs,
+  );
+  if (finalized.outcome === "breached" || finalized.outcome === "already_breached") {
+    throw new ExecutorError("sponsorship_invariant_breach");
+  }
+  if (receipt.execution === "reverted") throw new ExecutorError("receipt_reverted");
+  if (finalized.outcome !== "committed" && finalized.outcome !== "already_committed") {
+    throw new ExecutorError("receipt_unreconciled");
+  }
+  return {
+    status: "accepted",
+    transactionHash: submission.transactionHash,
+    actualFeeFri: actualFee.toString(),
+    reservedTodayFri: finalized.reservedTodayFri,
+    spentTodayFri: finalized.spentTodayFri,
+  };
+}
+
+export type ExecutorReadiness = Readonly<{
+  configurationReady: boolean;
+  signerAdapterAvailable: false;
+  executable: false;
+}>;
+
+/** Aggregates readiness without exposing which deployment secret or field is absent. */
+export function executorReadiness(env: Env): ExecutorReadiness {
+  const configurationReady =
+    configuredDeploymentStage(env.DEPLOYMENT_STAGE) &&
+    configuredDeploymentId(env.DEPLOYMENT_ID) &&
+    /^0x[0-9a-f]{1,64}$/i.test(env.RELAYER_ACCOUNT_ADDRESS) &&
+    !/^0x0+$/i.test(env.RELAYER_ACCOUNT_ADDRESS) &&
+    isProductionRpcUrl(env.STARKNET_RPC_URL) &&
+    isConfiguredSecret(env.RELAYER_ACCOUNT_PRIVATE_KEY) &&
+    isConfiguredSecret(env.STARKNET_RPC_AUTH_TOKEN);
+  return {
+    configurationReady,
+    signerAdapterAvailable: false,
+    executable: false,
+  };
+}
+
+export type BalanceHealth = Readonly<{
+  status: "disabled" | "unavailable" | "low" | "ok";
+  alert: boolean;
+}>;
+
+/** Deliberately reports only a threshold state, never an address or exact balance. */
+export function assessBalanceHealth(
+  balanceFri: string | undefined,
+  minimumFri: string,
+  submissionEnabled: boolean,
+): BalanceHealth {
+  if (!submissionEnabled) return { status: "disabled", alert: false };
+  if (balanceFri === undefined) return { status: "unavailable", alert: true };
+  try {
+    const balance = strictDecimal(balanceFri, true);
+    const minimum = strictDecimal(minimumFri);
+    return balance < minimum ? { status: "low", alert: true } : { status: "ok", alert: false };
+  } catch {
+    return { status: "unavailable", alert: true };
+  }
+}
+
+export async function readBalanceHealth(
+  adapter: StarknetRelayAdapter,
+  minimumFri: string,
+  submissionEnabled: boolean,
+): Promise<BalanceHealth> {
+  if (!submissionEnabled) return assessBalanceHealth(undefined, minimumFri, false);
+  try {
+    return assessBalanceHealth(await adapter.readRelayerBalance(), minimumFri, true);
+  } catch {
+    return { status: "unavailable", alert: true };
+  }
+}
+
+/** Phase A deliberately has no concrete signer/RPC adapter to instantiate. */
+export function createStarknetRelayAdapter(_env: Env): StarknetRelayAdapter {
+  throw new ExecutorError("signer_adapter_unavailable");
+}
+
+export function budgetObjectName(env: Env): string {
+  if (!configuredDeploymentId(env.DEPLOYMENT_ID)) {
+    throw new ExecutorError("executor_config_incomplete");
+  }
+  return `afterlight-budget:${env.DEPLOYMENT_ID}`;
+}
+
+export function utcDayKey(nowMs: number): string {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+    throw new ExecutorError("executor_config_incomplete");
+  }
+  return new Date(nowMs).toISOString().slice(0, 10);
+}
+
+function strictDecimal(value: string, allowZero = false): bigint {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new ExecutorError("fee_policy_rejected");
+  const parsed = BigInt(value);
+  if (!allowZero && parsed === 0n) throw new ExecutorError("fee_policy_rejected");
+  return parsed;
+}
+
+function isTransactionHash(value: string): boolean {
+  return /^0x[0-9a-f]{1,64}$/.test(value);
+}
+
+function isProductionRpcUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.hostname.endsWith(".invalid");
+  } catch {
+    return false;
+  }
+}
+
+function isConfiguredSecret(value: string | undefined): boolean {
+  return typeof value === "string" && value.length >= 16;
+}
+
+function configuredDeploymentStage(value: string): boolean {
+  return value !== "" && value !== "phase-a-local";
+}
+
+function configuredDeploymentId(value: string): boolean {
+  return value !== "" && value !== "phase-a-local";
+}
+
+function duplicateResult(
+  state: Exclude<ReservationState, "released">,
+  transactionHash: string | null,
+): ExecutionResult {
+  return { status: "duplicate", state, transactionHash };
+}
+
+function stateFromDuplicate(
+  outcome: Exclude<BudgetReserveResult["outcome"], "reserved">,
+): Exclude<ReservationState, "released"> {
+  if (outcome === "duplicate_reserved") return "reserved";
+  if (outcome === "duplicate_submitted") return "submitted";
+  if (outcome === "duplicate_committed") return "committed";
+  if (outcome === "duplicate_reverted") return "reverted";
+  return "breached";
+}

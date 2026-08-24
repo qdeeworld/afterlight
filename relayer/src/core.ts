@@ -33,7 +33,10 @@ export type RelayPlan = Readonly<{
   schema: "afterlight-relay-plan/1";
   operation: RelayOperation;
   chainId: string;
+  /** Exact normalized call, including expiry and signature, for adapter reconciliation. */
   fingerprint: string;
+  /** Signature/expiry-independent operation identity for deployment-wide idempotency. */
+  semanticKey: string;
   call: RelayCall;
   requiresContractSimulation: true;
   contractVerificationAuthoritative: true;
@@ -107,13 +110,32 @@ export async function prepareRelayPlan(
     throw new RelayHttpError(422, "invalid_expected_state");
   }
 
-  // Hash the normalized request so JSON key ordering cannot bypass idempotency.
-  const fingerprint = await sha256Hex(JSON.stringify(normalized));
+  // Exactness and idempotency are deliberately separate. A fresh expiry or a
+  // different valid signature must not create a second operation for one nonce.
+  const fingerprint = await sha256Hex(
+    JSON.stringify({ chainId: env.STARKNET_CHAIN_ID, request: normalized }),
+  );
+  const semanticKey = await sha256Hex(
+    JSON.stringify({
+      chainId: env.STARKNET_CHAIN_ID,
+      contract: normalized.contract,
+      vault: normalized.args.vault_id,
+      operation: `${normalized.schema}:${normalized.operation}`,
+      expectedState: normalized.args.expected_state,
+      expectedEpoch: normalized.args.expected_epoch,
+      expectedNonce: normalized.args.expected_nonce,
+      token: normalized.args.token,
+      amount: normalized.args.amount,
+      // Add an exact destination-note field here before relaying an operation
+      // whose authorization domain contains one.
+    }),
+  );
   const plan: RelayPlan = Object.freeze({
     schema: "afterlight-relay-plan/1",
     operation: normalized.operation,
     chainId: env.STARKNET_CHAIN_ID,
     fingerprint,
+    semanticKey,
     call: Object.freeze({
       contractAddress: normalized.contract,
       entrypoint: ENTRYPOINT[normalized.operation],

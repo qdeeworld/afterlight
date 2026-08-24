@@ -16,9 +16,30 @@
     "MAX_RELAY_PAYLOAD_BYTES": "2048",
     "MAX_SPONSORED_FEE_FRI": "200000000000000000",
     "DAILY_SPONSOR_BUDGET_FRI": "1000000000000000000",
+    "SPONSOR_FEE_MARGIN_BPS": "11000",
+    "MIN_RELAYER_BALANCE_FRI": "1000000000000000000",
+    // Deliberately inert placeholders. A promoted deployment must replace every one.
+    "DEPLOYMENT_ID": "phase-a-local",
+    "RELAYER_ACCOUNT_ADDRESS": "0x0",
+    "STARKNET_RPC_URL": "https://rpc.invalid",
     // This Phase A Worker contains no signer or broadcast path and must fail closed.
     "SUBMIT_ENABLED": "false"
   },
+  // Names only: values must be installed with `wrangler secret put` after promotion.
+  "secrets": {
+    "required": [
+      "RELAYER_ACCOUNT_PRIVATE_KEY",
+      "STARKNET_RPC_AUTH_TOKEN"
+    ]
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "RELAY_BUDGET", "class_name": "RelayBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RelayBudget"] }
+  ],
   "ratelimits": [
     {
       "name": "RELAY_RATE_LIMITER",
@@ -32,8 +53,7 @@
     }
   ],
   "limits": {
-    "cpu_ms": 50,
-    "subrequests": 5
+    "cpu_ms": 50
   },
   "observability": {
     "enabled": true,

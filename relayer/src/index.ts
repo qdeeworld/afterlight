@@ -11,6 +11,16 @@ import {
   readUtf8BodyLimited,
   requireRelayHeaders,
 } from "./core.js";
+import {
+  assessBalanceHealth,
+  budgetObjectName,
+  createStarknetRelayAdapter,
+  executeRelayPlan,
+  executorReadiness,
+  type BudgetCoordinator,
+} from "./executor.js";
+
+export { RelayBudget } from "./budget.js";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -32,9 +42,6 @@ export default {
       }
 
       requireRelayHeaders(request, env);
-      if (env.SUBMIT_ENABLED !== "false") {
-        throw new RelayHttpError(503, "phase_a_submit_must_remain_disabled");
-      }
       const bodyLimit = Number(
         parsePositiveDecimal(env.MAX_RELAY_PAYLOAD_BYTES, "payload_limit", 2_048n),
       );
@@ -45,6 +52,32 @@ export default {
         BigInt(Math.floor(Date.now() / 1_000)),
       );
       await rateLimitRelay(normalized, env);
+
+      if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
+        const readiness = executorReadiness(env);
+        if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
+        const nowMs = Date.now();
+        const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(
+          budgetObjectName(env),
+        );
+        const result = await executeRelayPlan(
+          plan,
+          {
+            submitEnabled: true,
+            perCallCapFri: parsePositiveDecimal(env.MAX_SPONSORED_FEE_FRI, "fee_cap"),
+            dailyBudgetFri: parsePositiveDecimal(env.DAILY_SPONSOR_BUDGET_FRI, "daily_budget"),
+            feeMarginBps: parsePositiveDecimal(env.SPONSOR_FEE_MARGIN_BPS, "fee_margin", 12_000n),
+          },
+          createStarknetRelayAdapter(env),
+          budget,
+          nowMs,
+        );
+        return jsonResponse(
+          { status: "relayed", result },
+          200,
+          corsHeaders(env.ALLOWED_ORIGIN),
+        );
+      }
 
       return jsonResponse(
         {
@@ -81,24 +114,16 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 function health(env: Env): Response {
-  const submitDisabled = env.SUBMIT_ENABLED === "false";
+  const submitDisabled = !isSubmissionEnabled(env.SUBMIT_ENABLED);
+  const readiness = executorReadiness(env);
   return jsonResponse(
     {
       status: submitDisabled ? "ok" : "degraded",
       service: "afterlight-neutral-relayer",
-      stage: env.DEPLOYMENT_STAGE,
       schema: "afterlight-relay/1",
-      chainId: env.STARKNET_CHAIN_ID,
       submission: "disabled",
-      contractConfigured:
-        env.DEPLOYMENT_STAGE !== "phase-a-local" && !/^0x0*$/i.test(env.AFTERLIGHT_CONTRACT),
-      tokenConfigured: !/^0x0*$/i.test(env.STRK_TOKEN),
-      limits: {
-        maxPayloadBytes: env.MAX_RELAY_PAYLOAD_BYTES,
-        maxTtlSeconds: env.MAX_RELAY_TTL_SECONDS,
-        maxSponsoredFeeFri: env.MAX_SPONSORED_FEE_FRI,
-        dailySponsorBudgetFri: env.DAILY_SPONSOR_BUDGET_FRI,
-      },
+      executor: readiness,
+      balance: assessBalanceHealth(undefined, env.MIN_RELAYER_BALANCE_FRI, !submitDisabled),
       privacy: {
         payloadLogging: false,
         appKeysHeld: false,
@@ -107,6 +132,10 @@ function health(env: Env): Response {
     },
     submitDisabled ? 200 : 503,
   );
+}
+
+function isSubmissionEnabled(value: string): boolean {
+  return value === "true";
 }
 
 function preflight(request: Request, env: Env): Response {

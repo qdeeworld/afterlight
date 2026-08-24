@@ -22,6 +22,7 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(body).toContain('"submission":"disabled"');
     expect(body).toContain('"payloadLogging":false');
     expect(body).not.toMatch(/private_key|wallet_address|ip_address|relayer_account/i);
+    expect(body).not.toMatch(/secretConfigured|maxSponsoredFee|dailySponsorBudget|"limits"/i);
   });
 
   it.each([
@@ -45,6 +46,7 @@ describe("Afterlight Phase A relay Worker", () => {
         operation: string;
         chainId: string;
         fingerprint: string;
+        semanticKey: string;
         call: { contractAddress: string; entrypoint: string; calldata: string[] };
         requiresContractSimulation: boolean;
         contractVerificationAuthoritative: boolean;
@@ -56,6 +58,7 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(body.plan.operation).toBe(operation);
     expect(body.plan.chainId).toBe("0x534e5f4d41494e");
     expect(body.plan.fingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.plan.semanticKey).toMatch(/^[0-9a-f]{64}$/);
     expect(body.plan.call.contractAddress).toMatch(/^0x0+1234$/);
     expect(body.plan.call.entrypoint).toBe(entrypoint);
     expect(body.plan.call.calldata).toHaveLength(9);
@@ -98,7 +101,7 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(deniedIntent.status).toBe(400);
   });
 
-  it("derives idempotency from normalized fields, not attacker-controlled JSON ordering", async () => {
+  it("derives exact fingerprints from normalized fields, not attacker-controlled JSON ordering", async () => {
     const canonical = buildRelayRequest(RelayOperation.Heartbeat, contract, {
       ...validArgs(1n),
       vault_id: "0xcafe",
@@ -133,6 +136,37 @@ describe("Afterlight Phase A relay Worker", () => {
       fingerprints.push(body.plan.fingerprint);
     }
     expect(fingerprints[0]).toBe(fingerprints[1]);
+  });
+
+  it("keeps one semantic operation key across alternate signatures and expiries", async () => {
+    const now = BigInt(Math.floor(Date.now() / 1_000));
+    const first = buildRelayRequest(RelayOperation.Heartbeat, contract, {
+      ...validArgs(1n),
+      valid_until: (now + 300n).toString(),
+      sig_r: "0x111",
+      sig_s: "0x222",
+    });
+    const second = buildRelayRequest(RelayOperation.Heartbeat, contract, {
+      ...first.args,
+      valid_until: (now + 500n).toString(),
+      sig_r: "0x333",
+      sig_s: "0x444",
+    });
+    const plans: Array<{ fingerprint: string; semanticKey: string }> = [];
+    for (const relay of [first, second]) {
+      const response = await exports.default.fetch(
+        new Request("https://relay.invalid/v1/relay", {
+          method: "POST",
+          headers: relayHeaders(),
+          body: encodeRelayRequest(relay),
+        }),
+      );
+      expect(response.status).toBe(202);
+      const body = await response.json<{ plan: { fingerprint: string; semanticKey: string } }>();
+      plans.push(body.plan);
+    }
+    expect(plans[0]?.semanticKey).toBe(plans[1]?.semanticKey);
+    expect(plans[0]?.fingerprint).not.toBe(plans[1]?.fingerprint);
   });
 
   it("rejects malformed, oversized, expired, mismatched and unsupported payloads", async () => {
