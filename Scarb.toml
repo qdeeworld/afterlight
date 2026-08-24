@@ -46,3 +46,8 @@ inlining-strategy = 8
 inherits = "release"
 [profile.spike-inline-12.cairo]
 inlining-strategy = 12
+
+[profile.spike-inline-56]
+inherits = "release"
+[profile.spike-inline-56.cairo]
+inlining-strategy = 56

@@ -21,6 +21,7 @@ const allowedProfiles = new Set([
   "spike-inline-4",
   "spike-inline-8",
   "spike-inline-12",
+  "spike-inline-56",
 ]);
 if (!allowedProfiles.has(compilerProfile)) {
   throw new Error(`Unsupported compiler profile: ${compilerProfile}`);
