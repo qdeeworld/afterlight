@@ -1,0 +1,48 @@
+[package]
+name = "afterlight_spike"
+version = "0.1.0"
+edition = "2024_07"
+license = "Apache-2.0"
+description = "Bounded STRK20 recovery-reserve mechanism spike"
+
+[dependencies]
+starknet = "2.17.0"
+# Proven by NIGHTSHIFT against the current mainnet pool. Keep this at the
+# repository root so the STRK20 registry can detect the integration later.
+privacy = { git = "https://github.com/starkware-libs/starknet-privacy", rev = "66e3caae8c0201227a6719696d004e30d90aea65" }
+
+[dev-dependencies]
+snforge_std = "0.62.1"
+assert_macros = "2.17.0"
+
+[[target.starknet-contract]]
+sierra = true
+casm = true
+
+[scripts]
+test = "snforge test"
+
+# Bounded declaration-cost experiment. The default/release compiler inlines
+# aggressively; this profile measures whether a smaller class meaningfully
+# lowers mainnet declaration cost. It is not a deployment choice until local
+# execution tests and an all-in fee quote pass.
+[profile.spike-size]
+inherits = "release"
+
+[profile.spike-size.cairo]
+inlining-strategy = "avoid"
+
+[profile.spike-inline-4]
+inherits = "release"
+[profile.spike-inline-4.cairo]
+inlining-strategy = 4
+
+[profile.spike-inline-8]
+inherits = "release"
+[profile.spike-inline-8.cairo]
+inlining-strategy = 8
+
+[profile.spike-inline-12]
+inherits = "release"
+[profile.spike-inline-12.cairo]
+inlining-strategy = 12

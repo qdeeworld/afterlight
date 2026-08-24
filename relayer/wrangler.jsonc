@@ -1,0 +1,50 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "afterlight-relayer-phase-a",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    // Local-only Phase A values. Replace the contract and origin after promotion.
+    "DEPLOYMENT_STAGE": "phase-a-local",
+    "ALLOWED_ORIGIN": "https://afterlight.invalid",
+    "AFTERLIGHT_CONTRACT": "0x1234",
+    "STARKNET_CHAIN_ID": "0x534e5f4d41494e",
+    "STRK_TOKEN": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "RESERVE_AMOUNT_FRI": "10000000000000000000",
+    "MAX_RELAY_TTL_SECONDS": "900",
+    "MAX_RELAY_PAYLOAD_BYTES": "2048",
+    "MAX_SPONSORED_FEE_FRI": "200000000000000000",
+    "DAILY_SPONSOR_BUDGET_FRI": "1000000000000000000",
+    // This Phase A Worker contains no signer or broadcast path and must fail closed.
+    "SUBMIT_ENABLED": "false"
+  },
+  "ratelimits": [
+    {
+      "name": "RELAY_RATE_LIMITER",
+      "namespace_id": "73001",
+      "simple": { "limit": 4, "period": 60 }
+    },
+    {
+      "name": "RELAY_GLOBAL_LIMITER",
+      "namespace_id": "73002",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
+  "limits": {
+    "cpu_ms": 50,
+    "subrequests": 5
+  },
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  }
+}

@@ -1,0 +1,10 @@
+target/
+.snfoundry_cache/
+client/node_modules/
+client/dist/
+client/tools/ready-quote.js
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example

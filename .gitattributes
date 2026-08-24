@@ -1,0 +1,5 @@
+# Wrangler's generated Workers type corpus currently contains a handful of
+# upstream trailing spaces. Preserve byte-for-byte generation so `wrangler
+# types --check` remains reproducible while excluding only that generated file
+# from Git's blank-at-EOL diagnostic.
+relayer/worker-configuration.d.ts whitespace=-blank-at-eol

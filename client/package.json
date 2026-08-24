@@ -1,0 +1,23 @@
+{
+  "name": "afterlight-phase-a-client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "quote:mainnet": "node tools/quote-declare-deploy.mjs",
+    "quote:ready-build": "esbuild tools/ready-deployment-data.ts --bundle --format=esm --platform=browser --outfile=tools/ready-quote.js"
+  },
+  "dependencies": {
+    "@starknet-io/types-js": "0.10.4-beta.2",
+    "starknet": "10.7.0"
+  },
+  "devDependencies": {
+    "@starknet-io/get-starknet-discovery": "^6.0.4",
+    "@starknet-io/get-starknet-wallet-standard": "^6.0.4",
+    "@types/node": "24.10.1",
+    "esbuild": "^0.28.1",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+*.log
+worker-startup.cpuprofile
+.dev.vars
+.env
+.env.*
+!.env.example

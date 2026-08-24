@@ -1,0 +1,24 @@
+{
+  "name": "afterlight-phase-a-relayer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint --deny typescript/no-floating-promises src test vitest.config.ts",
+    "test": "vitest run",
+    "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "startup": "wrangler check startup --outfile worker-startup.cpuprofile",
+    "check": "npm run types:check && npm run typecheck && npm run lint && npm test && npm run dry-run && npm run startup"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.0.0",
+    "@types/node": "26.2.0",
+    "oxlint": "1.79.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "wrangler": "4.125.0"
+  }
+}
