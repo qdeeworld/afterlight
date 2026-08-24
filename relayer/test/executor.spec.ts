@@ -88,7 +88,7 @@ describe("fail-closed exact-call executor", () => {
     expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
   });
 
-  it("keeps ambiguous receipt exposure reserved for manual reconciliation", async () => {
+  it("keeps ambiguous receipt exposure reserved for exact-request reconciliation", async () => {
     const adapter = fakeAdapter({ receipt: { status: "pending" } });
     const budget = freshBudget();
     await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
@@ -104,6 +104,26 @@ describe("fail-closed exact-call executor", () => {
       state: "submitted",
       transactionHash: "0xabc",
     });
+  });
+
+  it("reconciles a previously submitted transaction without simulating or signing again", async () => {
+    const adapter = fakeAdapter();
+    adapter.reconcileReceipt = vi
+      .fn<StarknetRelayAdapter["reconcileReceipt"]>()
+      .mockResolvedValueOnce({ status: "pending" })
+      .mockResolvedValueOnce(successfulReceipt());
+    const budget = freshBudget();
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+      new ExecutorError("receipt_unreconciled"),
+    );
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 1)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+      actualFeeFri: "70",
+    });
+    expect(adapter.simulateExact).toHaveBeenCalledTimes(1);
+    expect(adapter.signAndSubmitExact).toHaveBeenCalledTimes(1);
+    expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
   });
 
   it("commits gas from a definitive reverted receipt and reports failure", async () => {

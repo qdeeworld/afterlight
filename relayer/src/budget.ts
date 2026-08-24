@@ -79,6 +79,7 @@ export class BudgetError extends Error {
     | "invalid_budget_input"
     | "daily_budget"
     | "per_call_cap"
+    | "relayer_busy"
     | "sponsorship_frozen"
     | "idempotency_conflict"
     | "reservation_missing"
@@ -175,6 +176,14 @@ export class RelayBudget extends DurableObject<Env> {
         );
       }
       if (this.isFrozen()) throw new BudgetError("sponsorship_frozen");
+      const active = this.ctx.storage.sql
+        .exec<{ count: number }>(
+          "SELECT COUNT(*) AS count FROM reservations WHERE status IN ('RESERVED', 'SUBMITTED')",
+        )
+        .one().count;
+      // One funded Starknet account has one nonce lane. Serializing sponsored
+      // exposure prevents two requests from signing the same pending nonce.
+      if (active !== 0) throw new BudgetError("relayer_busy");
 
       const totals = this.readTotals(normalized.dayKey);
       const maximum = BigInt(normalized.maxFeeFri);

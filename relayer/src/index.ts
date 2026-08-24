@@ -23,6 +23,7 @@ import {
   createStarknetRelayAdapter,
   executeRelayPlan,
   executorReadiness,
+  ExecutorError,
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
@@ -110,6 +111,8 @@ export default {
       const handled =
         error instanceof RelayHttpError
           ? error
+          : error instanceof ExecutorError
+            ? new RelayHttpError(error.code === "relayer_busy" ? 503 : 502, error.code)
           : new RelayHttpError(500, "internal_error");
       // Never log payloads, signatures, IPs, vault IDs, wallet addresses, or request headers.
       console.error(

@@ -71,30 +71,35 @@ export class StarknetV3RelayAdapter implements StarknetRelayAdapter {
     simulation: SuccessfulExactSimulation,
     transactionMaxFeeFri: string,
   ): Promise<ExactSubmission> {
-    await this.assertChain(plan);
-    if (simulation.callFingerprint !== plan.fingerprint) {
-      throw new Error("simulation_mismatch");
-    }
-    const bounds = parseBounds(simulation.feeQuote);
-    if (resourceCap(bounds) > strictPositiveDecimal(transactionMaxFeeFri)) {
-      throw new Error("submission_mismatch");
-    }
-    const liveNonce = BigInt(await this.account.getNonce("pre_confirmed"));
-    const quotedNonce = strictNonNegativeDecimal(simulation.feeQuote.nonce);
-    if (liveNonce !== quotedNonce) return { submitted: false };
+    let signed;
+    try {
+      await this.assertChain(plan);
+      if (simulation.callFingerprint !== plan.fingerprint) return { submitted: false };
+      const bounds = parseBounds(simulation.feeQuote);
+      if (resourceCap(bounds) > strictPositiveDecimal(transactionMaxFeeFri)) {
+        return { submitted: false };
+      }
+      const liveNonce = BigInt(await this.account.getNonce("pre_confirmed"));
+      const quotedNonce = strictNonNegativeDecimal(simulation.feeQuote.nonce);
+      if (liveNonce !== quotedNonce) return { submitted: false };
 
-    const expectedCalldata = transaction.getExecuteCalldata([toCall(plan)], this.cairoVersion);
-    const signed = await this.account.getSignedTransaction(toCall(plan), {
-      nonce: quotedNonce,
-      resourceBounds: bounds,
-    });
-    if (
-      normalizeHex(signed.sender_address) !== normalizeHex(this.account.address) ||
-      !sameFelts(signed.calldata, expectedCalldata) ||
-      resourceCap(stark.resourceBoundsToBigInt(signed.resource_bounds)) >
-        strictPositiveDecimal(transactionMaxFeeFri)
-    ) {
-      throw new Error("submission_mismatch");
+      const expectedCalldata = transaction.getExecuteCalldata([toCall(plan)], this.cairoVersion);
+      signed = await this.account.getSignedTransaction(toCall(plan), {
+        nonce: quotedNonce,
+        resourceBounds: bounds,
+      });
+      if (
+        normalizeHex(signed.sender_address) !== normalizeHex(this.account.address) ||
+        !sameFelts(signed.calldata, expectedCalldata) ||
+        resourceCap(stark.resourceBoundsToBigInt(signed.resource_bounds)) >
+          strictPositiveDecimal(transactionMaxFeeFri)
+      ) {
+        return { submitted: false };
+      }
+    } catch {
+      // Every operation above precedes broadcast, so releasing the reservation
+      // is safe. Only invokeSignedTx transport errors are submission-uncertain.
+      return { submitted: false };
     }
     const response = await this.provider.invokeSignedTx(signed);
     return {

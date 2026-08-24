@@ -68,6 +68,8 @@ describe("deployment-wide sponsorship coordinator", () => {
     });
 
     await budget.reserve(reserveInput("e".repeat(64), exact, "60"));
+    await budget.markSubmitted("e".repeat(64), exact, "0xdef", 2);
+    await budget.finalize("e".repeat(64), exact, "0xdef", "60", "succeeded", 3);
     await runInDurableObject(budget, async (instance: RelayBudget) => {
       expect(() =>
         instance.reserve({
@@ -77,9 +79,24 @@ describe("deployment-wide sponsorship coordinator", () => {
       ).toThrowError("daily_budget");
     });
     expect(await budget.snapshot(dayOne)).toMatchObject({
-      reservedTodayFri: "60",
-      spentTodayFri: "0",
+      reservedTodayFri: "0",
+      spentTodayFri: "60",
     });
+  });
+
+  it("admits only one active Starknet nonce lane at a time", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput());
+    await runInDurableObject(budget, async (instance: RelayBudget) => {
+      expect(() =>
+        instance.reserve(reserveInput("d".repeat(64), alternateExact, "10", dayOne, 2)),
+      ).toThrowError("relayer_busy");
+    });
+    await budget.release(semantic, exact, 3);
+    expect(
+      (await budget.reserve(reserveInput("d".repeat(64), alternateExact, "10", dayOne, 4)))
+        .outcome,
+    ).toBe("reserved");
   });
 
   it("keeps semantic idempotency global while UTC totals roll over", async () => {

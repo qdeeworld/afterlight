@@ -6,6 +6,7 @@ import type {
   BudgetLookupResult,
   ReservationState,
 } from "./budget.js";
+import { BudgetError } from "./budget.js";
 import type { RelayPlan } from "./core.js";
 import { StarknetV3RelayAdapter } from "./starknet-adapter.js";
 import { SponsorshipError, authorizeSponsorship } from "./sponsorship.js";
@@ -125,7 +126,8 @@ export class ExecutorError extends Error {
     | "receipt_unreconciled"
     | "receipt_reverted"
     | "signer_adapter_unavailable"
-    | "executor_config_incomplete";
+    | "executor_config_incomplete"
+    | "relayer_busy";
 
   constructor(code: ExecutorError["code"]) {
     super(code);
@@ -145,6 +147,19 @@ export async function executeRelayPlan(
   const dayKey = utcDayKey(nowMs);
   const prior = await budget.lookup(plan.semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
+    if (
+      prior.state === "submitted" &&
+      prior.transactionHash !== null &&
+      prior.exactFingerprint === plan.fingerprint
+    ) {
+      return reconcileSubmitted(
+        prior.transactionHash,
+        plan,
+        adapter,
+        budget,
+        nowMs,
+      );
+    }
     return duplicateResult(prior.state, prior.transactionHash);
   }
   if (prior.sponsorshipFrozen) throw new ExecutorError("sponsorship_frozen");
@@ -172,15 +187,23 @@ export async function executeRelayPlan(
   }
 
   const maxFeeFri = authorization.transactionMaxFeeFri.toString();
-  const reservation = await budget.reserve({
-    dayKey,
-    semanticKey: plan.semanticKey,
-    exactFingerprint: plan.fingerprint,
-    maxFeeFri,
-    perCallCapFri: policy.perCallCapFri.toString(),
-    dailyBudgetFri: policy.dailyBudgetFri.toString(),
-    nowMs,
-  });
+  let reservation: BudgetReserveResult;
+  try {
+    reservation = await budget.reserve({
+      dayKey,
+      semanticKey: plan.semanticKey,
+      exactFingerprint: plan.fingerprint,
+      maxFeeFri,
+      perCallCapFri: policy.perCallCapFri.toString(),
+      dailyBudgetFri: policy.dailyBudgetFri.toString(),
+      nowMs,
+    });
+  } catch (error) {
+    if (error instanceof BudgetError && error.code === "relayer_busy") {
+      throw new ExecutorError("relayer_busy");
+    }
+    throw error;
+  }
   if (reservation.outcome !== "reserved") {
     const raced = await budget.lookup(plan.semanticKey);
     if (raced.outcome === "found" && raced.state !== "released") {
@@ -219,9 +242,25 @@ export async function executeRelayPlan(
     throw new ExecutorError("submission_uncertain");
   }
 
+  return reconcileSubmitted(
+    submission.transactionHash,
+    plan,
+    adapter,
+    budget,
+    nowMs,
+  );
+}
+
+async function reconcileSubmitted(
+  transactionHash: string,
+  plan: RelayPlan,
+  adapter: StarknetRelayAdapter,
+  budget: BudgetCoordinator,
+  nowMs: number,
+): Promise<ExecutionResult> {
   let receipt: ExactReceipt;
   try {
-    receipt = await adapter.reconcileReceipt(submission.transactionHash, plan);
+    receipt = await adapter.reconcileReceipt(transactionHash, plan);
   } catch {
     throw new ExecutorError("receipt_unreconciled");
   }
@@ -229,7 +268,7 @@ export async function executeRelayPlan(
     throw new ExecutorError("receipt_unreconciled");
   }
   if (
-    receipt.transactionHash !== submission.transactionHash ||
+    receipt.transactionHash !== transactionHash ||
     receipt.callFingerprint !== plan.fingerprint
   ) {
     throw new ExecutorError("receipt_unreconciled");
@@ -244,7 +283,7 @@ export async function executeRelayPlan(
   const finalized = await budget.finalize(
     plan.semanticKey,
     plan.fingerprint,
-    submission.transactionHash,
+    transactionHash,
     actualFee.toString(),
     receipt.execution,
     nowMs,
@@ -258,7 +297,7 @@ export async function executeRelayPlan(
   }
   return {
     status: "accepted",
-    transactionHash: submission.transactionHash,
+    transactionHash,
     actualFeeFri: actualFee.toString(),
     reservedTodayFri: finalized.reservedTodayFri,
     spentTodayFri: finalized.spentTodayFri,

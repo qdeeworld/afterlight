@@ -32,3 +32,5 @@ Do not set `SUBMIT_ENABLED=true` on this Phase A Worker. The adapter exists for 
 6. Only then install the secrets and enable submission in a reviewed promotion commit. A flag without complete configuration still fails closed.
 
 Run `npm install`, `npm run types`, then `npm run check`. `npm run dry-run` only bundles locally; nothing is deployed.
+
+Production enablement, monitoring, receipt recovery, and rollback are defined in [`OPERATIONS.md`](./OPERATIONS.md).
