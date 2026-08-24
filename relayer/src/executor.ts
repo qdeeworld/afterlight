@@ -7,10 +7,27 @@ import type {
   ReservationState,
 } from "./budget.js";
 import type { RelayPlan } from "./core.js";
+import { StarknetV3RelayAdapter } from "./starknet-adapter.js";
 import { SponsorshipError, authorizeSponsorship } from "./sponsorship.js";
 
+export type ExactFeeQuote = Readonly<{
+  nonce: string;
+  resourceBounds: Readonly<{
+    l1_gas: Readonly<{ max_amount: string; max_price_per_unit: string }>;
+    l1_data_gas: Readonly<{ max_amount: string; max_price_per_unit: string }>;
+    l2_gas: Readonly<{ max_amount: string; max_price_per_unit: string }>;
+  }>;
+}>;
+
+export type SuccessfulExactSimulation = Readonly<{
+  ok: true;
+  callFingerprint: string;
+  quotedFeeFri: string;
+  feeQuote: ExactFeeQuote;
+}>;
+
 export type ExactSimulation = Readonly<
-  | { ok: true; callFingerprint: string; quotedFeeFri: string }
+  | SuccessfulExactSimulation
   | { ok: false }
 >;
 
@@ -38,7 +55,11 @@ export type ExactReceipt = Readonly<
 /** The production signer/RPC implementation is intentionally not present in Phase A. */
 export interface StarknetRelayAdapter {
   simulateExact(plan: RelayPlan): Promise<ExactSimulation>;
-  signAndSubmitExact(plan: RelayPlan, transactionMaxFeeFri: string): Promise<ExactSubmission>;
+  signAndSubmitExact(
+    plan: RelayPlan,
+    simulation: SuccessfulExactSimulation,
+    transactionMaxFeeFri: string,
+  ): Promise<ExactSubmission>;
   reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt>;
   readRelayerBalance(): Promise<string>;
 }
@@ -170,7 +191,7 @@ export async function executeRelayPlan(
 
   let submission: ExactSubmission;
   try {
-    submission = await adapter.signAndSubmitExact(plan, maxFeeFri);
+    submission = await adapter.signAndSubmitExact(plan, simulation, maxFeeFri);
   } catch {
     // An unexpected transport failure may have occurred after broadcast. Keep
     // the reservation until an operator reconciles the account nonce/receipt.
@@ -246,8 +267,8 @@ export async function executeRelayPlan(
 
 export type ExecutorReadiness = Readonly<{
   configurationReady: boolean;
-  signerAdapterAvailable: false;
-  executable: false;
+  signerAdapterAvailable: true;
+  executable: boolean;
 }>;
 
 /** Aggregates readiness without exposing which deployment secret or field is absent. */
@@ -257,13 +278,14 @@ export function executorReadiness(env: Env): ExecutorReadiness {
     configuredDeploymentId(env.DEPLOYMENT_ID) &&
     /^0x[0-9a-f]{1,64}$/i.test(env.RELAYER_ACCOUNT_ADDRESS) &&
     !/^0x0+$/i.test(env.RELAYER_ACCOUNT_ADDRESS) &&
+    ["0", "1"].includes(env.RELAYER_ACCOUNT_CAIRO_VERSION as string) &&
     isProductionRpcUrl(env.STARKNET_RPC_URL) &&
     isConfiguredSecret(env.RELAYER_ACCOUNT_PRIVATE_KEY) &&
     isConfiguredSecret(env.STARKNET_RPC_AUTH_TOKEN);
   return {
     configurationReady,
-    signerAdapterAvailable: false,
-    executable: false,
+    signerAdapterAvailable: true,
+    executable: configurationReady,
   };
 }
 
@@ -302,9 +324,12 @@ export async function readBalanceHealth(
   }
 }
 
-/** Phase A deliberately has no concrete signer/RPC adapter to instantiate. */
-export function createStarknetRelayAdapter(_env: Env): StarknetRelayAdapter {
-  throw new ExecutorError("signer_adapter_unavailable");
+/** Instantiated only after the request path has passed the explicit readiness gate. */
+export function createStarknetRelayAdapter(env: Env): StarknetRelayAdapter {
+  if (!executorReadiness(env).executable) {
+    throw new ExecutorError("executor_config_incomplete");
+  }
+  return new StarknetV3RelayAdapter(env);
 }
 
 export function budgetObjectName(env: Env): string {

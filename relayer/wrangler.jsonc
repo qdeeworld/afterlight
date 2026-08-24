@@ -21,8 +21,9 @@
     // Deliberately inert placeholders. A promoted deployment must replace every one.
     "DEPLOYMENT_ID": "phase-a-local",
     "RELAYER_ACCOUNT_ADDRESS": "0x0",
+    "RELAYER_ACCOUNT_CAIRO_VERSION": "1",
     "STARKNET_RPC_URL": "https://rpc.invalid",
-    // This Phase A Worker contains no signer or broadcast path and must fail closed.
+    // The signer path remains unreachable under these inert values and must fail closed.
     "SUBMIT_ENABLED": "false"
   },
   // Names only: values must be installed with `wrangler secret put` after promotion.
@@ -50,6 +51,11 @@
       "name": "RELAY_GLOBAL_LIMITER",
       "namespace_id": "73002",
       "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "CHECKPOINT_RATE_LIMITER",
+      "namespace_id": "73003",
+      "simple": { "limit": 4, "period": 60 }
     }
   ],
   "limits": {

@@ -8,8 +8,11 @@ import {
 } from "./schema.js";
 
 export const RELAY_PATH = "/v1/relay";
+export const CHECKPOINT_PATH = "/v1/checkpoint";
 export const HEALTH_PATH = "/health";
 export const RELAY_INTENT_HEADER = "relay-control";
+export const CHECKPOINT_INTENT_HEADER = "funding-checkpoint";
+export type RelayPlanOperation = RelayOperation | "CHECKPOINT";
 
 const EXPECTED_STATE: Readonly<Record<RelayOperation, bigint>> = Object.freeze({
   HEARTBEAT: 1n,
@@ -31,7 +34,7 @@ export type RelayCall = Readonly<{
 
 export type RelayPlan = Readonly<{
   schema: "afterlight-relay-plan/1";
-  operation: RelayOperation;
+  operation: RelayPlanOperation;
   chainId: string;
   /** Exact normalized call, including expiry and signature, for adapter reconciliation. */
   fingerprint: string;
@@ -53,6 +56,61 @@ export class RelayHttpError extends Error {
     this.name = "RelayHttpError";
     this.status = status;
     this.code = code;
+  }
+}
+
+/** Builds a global, payload-free checkpoint call with no wallet or vault correlation key. */
+export async function prepareCheckpointPlan(env: Env, nowMs: number): Promise<RelayPlan> {
+  if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
+    throw new RelayHttpError(500, "invalid_checkpoint_time");
+  }
+  const maxSponsoredFeeFri = parsePositiveDecimal(env.MAX_SPONSORED_FEE_FRI, "fee_cap");
+  const dailySponsorBudgetFri = parsePositiveDecimal(
+    env.DAILY_SPONSOR_BUDGET_FRI,
+    "daily_budget",
+  );
+  if (dailySponsorBudgetFri < maxSponsoredFeeFri) {
+    throw new RelayHttpError(503, "invalid_daily_budget");
+  }
+  const call = Object.freeze({
+    contractAddress: normalizedConfiguredAddress(env.AFTERLIGHT_CONTRACT),
+    entrypoint: "sync_funding_checkpoint",
+    calldata: Object.freeze([]) as readonly string[],
+  });
+  const fingerprint = await sha256Hex(
+    JSON.stringify({ chainId: env.STARKNET_CHAIN_ID, operation: "CHECKPOINT", call }),
+  );
+  // One neutral checkpoint per 15-second bucket prevents unbounded sponsorship
+  // while retaining no client, wallet, note, vault, or signature identifier.
+  const semanticKey = await sha256Hex(
+    JSON.stringify({
+      chainId: env.STARKNET_CHAIN_ID,
+      contract: call.contractAddress,
+      operation: "afterlight-checkpoint/1",
+      bucket: Math.floor(nowMs / 15_000),
+    }),
+  );
+  return Object.freeze({
+    schema: "afterlight-relay-plan/1",
+    operation: "CHECKPOINT",
+    chainId: env.STARKNET_CHAIN_ID,
+    fingerprint,
+    semanticKey,
+    call,
+    requiresContractSimulation: true,
+    contractVerificationAuthoritative: true,
+    maxSponsoredFeeFri: maxSponsoredFeeFri.toString(),
+    dailySponsorBudgetFri: dailySponsorBudgetFri.toString(),
+  });
+}
+
+export async function rateLimitCheckpoint(env: Env): Promise<void> {
+  const [globalOutcome, checkpointOutcome] = await Promise.all([
+    env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" }),
+    env.CHECKPOINT_RATE_LIMITER.limit({ key: "afterlight-checkpoint-global-v1" }),
+  ]);
+  if (!globalOutcome.success || !checkpointOutcome.success) {
+    throw new RelayHttpError(429, "rate_limited");
   }
 }
 
@@ -213,6 +271,19 @@ export function requireRelayHeaders(request: Request, env: Env): void {
   }
 }
 
+export function requireCheckpointHeaders(request: Request, env: Env): void {
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) {
+    throw new RelayHttpError(403, "origin_not_allowed");
+  }
+  if (request.headers.get("x-afterlight-intent") !== CHECKPOINT_INTENT_HEADER) {
+    throw new RelayHttpError(400, "intent_header_required");
+  }
+  const contentLength = request.headers.get("content-length");
+  if (request.body !== null || (contentLength !== null && contentLength !== "0")) {
+    throw new RelayHttpError(400, "checkpoint_payload_forbidden");
+  }
+}
+
 export function corsHeaders(origin: string): HeadersInit {
   return {
     "access-control-allow-origin": origin,
@@ -242,4 +313,11 @@ export function jsonResponse(
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function normalizedConfiguredAddress(value: string): string {
+  if (!/^0x[0-9a-f]+$/i.test(value)) throw new RelayHttpError(503, "invalid_contract");
+  const parsed = BigInt(value);
+  if (parsed === 0n) throw new RelayHttpError(503, "invalid_contract");
+  return `0x${parsed.toString(16).padStart(64, "0")}`;
 }

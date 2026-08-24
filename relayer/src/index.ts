@@ -1,15 +1,21 @@
 import {
   HEALTH_PATH,
+  CHECKPOINT_INTENT_HEADER,
+  CHECKPOINT_PATH,
   RELAY_INTENT_HEADER,
   RELAY_PATH,
   RelayHttpError,
   corsHeaders,
   jsonResponse,
   parsePositiveDecimal,
+  prepareCheckpointPlan,
   prepareRelayPlan,
+  rateLimitCheckpoint,
   rateLimitRelay,
   readUtf8BodyLimited,
   requireRelayHeaders,
+  requireCheckpointHeaders,
+  type RelayPlan,
 } from "./core.js";
 import {
   assessBalanceHealth,
@@ -17,6 +23,7 @@ import {
   createStarknetRelayAdapter,
   executeRelayPlan,
   executorReadiness,
+  readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
 
@@ -32,7 +39,10 @@ export default {
       if (request.method === "OPTIONS" && url.pathname === RELAY_PATH) {
         return preflight(request, env);
       }
-      if (url.pathname !== RELAY_PATH) {
+      if (request.method === "OPTIONS" && url.pathname === CHECKPOINT_PATH) {
+        return preflight(request, env);
+      }
+      if (url.pathname !== RELAY_PATH && url.pathname !== CHECKPOINT_PATH) {
         return jsonResponse({ status: "error", code: "not_found" }, 404);
       }
       if (request.method !== "POST") {
@@ -41,17 +51,25 @@ export default {
         });
       }
 
-      requireRelayHeaders(request, env);
-      const bodyLimit = Number(
-        parsePositiveDecimal(env.MAX_RELAY_PAYLOAD_BYTES, "payload_limit", 2_048n),
-      );
-      const payload = await readUtf8BodyLimited(request, bodyLimit);
-      const { request: normalized, plan } = await prepareRelayPlan(
-        payload,
-        env,
-        BigInt(Math.floor(Date.now() / 1_000)),
-      );
-      await rateLimitRelay(normalized, env);
+      let plan: RelayPlan;
+      if (url.pathname === CHECKPOINT_PATH) {
+        requireCheckpointHeaders(request, env);
+        await rateLimitCheckpoint(env);
+        plan = await prepareCheckpointPlan(env, Date.now());
+      } else {
+        requireRelayHeaders(request, env);
+        const bodyLimit = Number(
+          parsePositiveDecimal(env.MAX_RELAY_PAYLOAD_BYTES, "payload_limit", 2_048n),
+        );
+        const payload = await readUtf8BodyLimited(request, bodyLimit);
+        const prepared = await prepareRelayPlan(
+          payload,
+          env,
+          BigInt(Math.floor(Date.now() / 1_000)),
+        );
+        plan = prepared.plan;
+        await rateLimitRelay(prepared.request, env);
+      }
 
       if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
         const readiness = executorReadiness(env);
@@ -113,24 +131,33 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function health(env: Env): Response {
+async function health(env: Env): Promise<Response> {
   const submitDisabled = !isSubmissionEnabled(env.SUBMIT_ENABLED);
   const readiness = executorReadiness(env);
+  const balance =
+    submitDisabled || !readiness.executable
+      ? assessBalanceHealth(undefined, env.MIN_RELAYER_BALANCE_FRI, !submitDisabled)
+      : await readBalanceHealth(
+          createStarknetRelayAdapter(env),
+          env.MIN_RELAYER_BALANCE_FRI,
+          true,
+        );
+  const ready = !submitDisabled && readiness.executable && balance.status === "ok";
   return jsonResponse(
     {
-      status: submitDisabled ? "ok" : "degraded",
+      status: submitDisabled ? "ok" : ready ? "ok" : "degraded",
       service: "afterlight-neutral-relayer",
       schema: "afterlight-relay/1",
-      submission: "disabled",
+      submission: submitDisabled ? "disabled" : "enabled",
       executor: readiness,
-      balance: assessBalanceHealth(undefined, env.MIN_RELAYER_BALANCE_FRI, !submitDisabled),
+      balance,
       privacy: {
         payloadLogging: false,
         appKeysHeld: false,
         walletAddressesRequired: false,
       },
     },
-    submitDisabled ? 200 : 503,
+    submitDisabled || ready ? 200 : 503,
   );
 }
 
@@ -149,7 +176,10 @@ function preflight(request: Request, env: Env): Response {
     headers: {
       ...corsHeaders(env.ALLOWED_ORIGIN),
       "cache-control": "no-store",
-      "x-afterlight-intent": RELAY_INTENT_HEADER,
+      "x-afterlight-intent":
+        new URL(request.url).pathname === CHECKPOINT_PATH
+          ? CHECKPOINT_INTENT_HEADER
+          : RELAY_INTENT_HEADER,
     },
   });
 }

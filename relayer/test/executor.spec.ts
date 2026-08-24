@@ -53,9 +53,9 @@ describe("fail-closed exact-call executor", () => {
     expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
   });
 
-  it("contains no constructible Phase A signer or broadcaster", () => {
+  it("keeps the concrete adapter unreachable under inert Phase A configuration", () => {
     expect(() => createStarknetRelayAdapter(env)).toThrowError(
-      new ExecutorError("signer_adapter_unavailable"),
+      new ExecutorError("executor_config_incomplete"),
     );
   });
 
@@ -177,7 +177,7 @@ describe("fail-closed exact-call executor", () => {
     const readiness = executorReadiness(env);
     expect(readiness).toEqual({
       configurationReady: false,
-      signerAdapterAvailable: false,
+      signerAdapterAvailable: true,
       executable: false,
     });
     expect(assessBalanceHealth(undefined, "100", true)).toEqual({
@@ -213,7 +213,19 @@ function freshBudget(): BudgetCoordinator {
 }
 
 function successfulSimulation(quotedFeeFri = "100"): ExactSimulation {
-  return { ok: true, callFingerprint: plan.fingerprint, quotedFeeFri };
+  return {
+    ok: true,
+    callFingerprint: plan.fingerprint,
+    quotedFeeFri,
+    feeQuote: {
+      nonce: "7",
+      resourceBounds: {
+        l1_gas: { max_amount: "10", max_price_per_unit: "10" },
+        l1_data_gas: { max_amount: "0", max_price_per_unit: "0" },
+        l2_gas: { max_amount: "0", max_price_per_unit: "0" },
+      },
+    },
+  };
 }
 
 function fakeAdapter(overrides: {
@@ -226,7 +238,7 @@ function fakeAdapter(overrides: {
 } {
   return {
     simulateExact: vi.fn(async () => overrides.simulation ?? successfulSimulation()),
-    signAndSubmitExact: vi.fn(async (_plan, transactionMaxFeeFri) =>
+    signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri) =>
       overrides.submission ?? {
         submitted: true,
         transactionHash: "0xabc",

@@ -67,6 +67,56 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(body.plan.maxSponsoredFeeFri).toBe("200000000000000000");
   });
 
+  it("builds a payload-free neutral funding checkpoint without wallet or vault material", async () => {
+    const response = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/checkpoint", {
+        method: "POST",
+        headers: {
+          origin,
+          "x-afterlight-intent": "funding-checkpoint",
+        },
+      }),
+    );
+    expect(response.status).toBe(202);
+    const body = await response.json<{
+      plan: {
+        operation: string;
+        semanticKey: string;
+        call: { contractAddress: string; entrypoint: string; calldata: string[] };
+      };
+    }>();
+    expect(body.plan.operation).toBe("CHECKPOINT");
+    expect(body.plan.semanticKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.plan.call).toMatchObject({
+      entrypoint: "sync_funding_checkpoint",
+      calldata: [],
+    });
+    expect(JSON.stringify(body)).not.toMatch(/wallet|vault|signature|ready/i);
+  });
+
+  it("rejects checkpoint payloads and the control intent on the checkpoint route", async () => {
+    const withPayload = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/checkpoint", {
+        method: "POST",
+        headers: {
+          origin,
+          "content-type": "application/json",
+          "x-afterlight-intent": "funding-checkpoint",
+        },
+        body: "{}",
+      }),
+    );
+    expect(withPayload.status).toBe(400);
+
+    const wrongIntent = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/checkpoint", {
+        method: "POST",
+        headers: { origin, "x-afterlight-intent": "relay-control" },
+      }),
+    );
+    expect(wrongIntent.status).toBe(400);
+  });
+
   it("allows only the configured browser origin and explicit non-simple intent", async () => {
     const allowed = await exports.default.fetch(
       new Request("https://relay.invalid/v1/relay", {
