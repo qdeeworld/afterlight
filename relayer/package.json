@@ -10,8 +10,9 @@
     "lint": "oxlint --deny typescript/no-floating-promises src test vitest.config.ts",
     "test": "vitest run",
     "dry-run": "wrangler deploy --dry-run --outdir .wrangler/dry-run",
+    "dry-run:staging": "wrangler deploy --dry-run --config wrangler.staging.jsonc --outdir .wrangler/dry-run-staging",
     "startup": "wrangler check startup --outfile worker-startup.cpuprofile",
-    "check": "npm run types:check && npm run typecheck && npm run lint && npm test && npm run dry-run && npm run startup"
+    "check": "npm run types:check && npm run typecheck && npm run lint && npm test && npm run dry-run && npm run dry-run:staging && npm run startup"
   },
   "dependencies": {
     "starknet": "10.7.0"

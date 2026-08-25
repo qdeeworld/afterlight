@@ -1,0 +1,65 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  // Inert public staging only. Production uses wrangler.jsonc, which requires
+  // both signer and authenticated-RPC secrets before Wrangler may deploy it.
+  "name": "afterlight-relayer-phase-a",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-24",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "DEPLOYMENT_STAGE": "phase-a-staging",
+    "ALLOWED_ORIGIN": "https://afterlight.invalid",
+    "AFTERLIGHT_CONTRACT": "0x1234",
+    "STARKNET_CHAIN_ID": "0x534e5f4d41494e",
+    "STRK_TOKEN": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+    "RESERVE_AMOUNT_FRI": "10000000000000000000",
+    "MAX_RELAY_TTL_SECONDS": "900",
+    "MAX_RELAY_PAYLOAD_BYTES": "2048",
+    "MAX_SPONSORED_FEE_FRI": "200000000000000000",
+    "DAILY_SPONSOR_BUDGET_FRI": "1000000000000000000",
+    "SPONSOR_FEE_MARGIN_BPS": "11000",
+    "MIN_RELAYER_BALANCE_FRI": "1000000000000000000",
+    "DEPLOYMENT_ID": "phase-a-staging-inert",
+    "RELAYER_ACCOUNT_ADDRESS": "0x0",
+    "RELAYER_ACCOUNT_CAIRO_VERSION": "1",
+    "STARKNET_RPC_URL": "https://rpc.invalid",
+    "SUBMIT_ENABLED": "false"
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "RELAY_BUDGET", "class_name": "RelayBudget" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["RelayBudget"] }
+  ],
+  "ratelimits": [
+    {
+      "name": "RELAY_RATE_LIMITER",
+      "namespace_id": "73001",
+      "simple": { "limit": 4, "period": 60 }
+    },
+    {
+      "name": "RELAY_GLOBAL_LIMITER",
+      "namespace_id": "73002",
+      "simple": { "limit": 30, "period": 60 }
+    },
+    {
+      "name": "CHECKPOINT_RATE_LIMITER",
+      "namespace_id": "73003",
+      "simple": { "limit": 4, "period": 60 }
+    }
+  ],
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": false
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  }
+}
