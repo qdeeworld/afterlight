@@ -47,6 +47,12 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 
 ## Monitoring and alerts
 
+The public repository's `Inert relayer staging health` workflow checks the
+provider-only Phase A endpoint every 30 minutes while submission is disabled.
+It verifies the fail-closed executor state, privacy response, and security
+headers. Replace that staging check with production health and alerting during
+promotion; a green inert check is never production readiness evidence.
+
 Monitor through at least 2026-09-04:
 
 - `/health` availability and collapsed balance status;

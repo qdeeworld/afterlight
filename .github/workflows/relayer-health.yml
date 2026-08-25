@@ -1,0 +1,54 @@
+name: Inert relayer staging health
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inert-relayer-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Verify fail-closed staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check HTTPS health and security boundary
+        env:
+          HEALTH_URL: https://afterlight-relayer-phase-a.qdworld001.workers.dev/health
+        run: |
+          set -euo pipefail
+          evidence_dir="$(mktemp -d)"
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 20 \
+            --dump-header "$evidence_dir/headers" \
+            --output "$evidence_dir/body.json" \
+            "$HEALTH_URL"
+
+          jq -e '
+            .status == "ok" and
+            .service == "afterlight-neutral-relayer" and
+            .schema == "afterlight-relay/1" and
+            .submission == "disabled" and
+            .executor.configurationReady == false and
+            .executor.executable == false and
+            .balance.status == "disabled" and
+            .privacy.payloadLogging == false and
+            .privacy.appKeysHeld == false and
+            .privacy.walletAddressesRequired == false
+          ' "$evidence_dir/body.json"
+
+          grep -Eiq '^cache-control: no-store' "$evidence_dir/headers"
+          grep -Eiq '^content-security-policy:.*default-src .none.' "$evidence_dir/headers"
+          grep -Eiq '^x-content-type-options: nosniff' "$evidence_dir/headers"
