@@ -15,6 +15,7 @@ const retryButton = requiredButton("retry");
 const silentButton = requiredButton("silent");
 const connectButton = requiredButton("connect");
 const deploymentButton = requiredButton("deployment");
+const capabilitiesButton = requiredButton("capabilities");
 
 const store = createStore();
 let ready: ReadyWallet | undefined;
@@ -42,6 +43,7 @@ function refresh(): void {
   silentButton.disabled = !ready;
   connectButton.disabled = !ready;
   deploymentButton.disabled = !ready;
+  capabilitiesButton.disabled = !ready;
   walletHelp.hidden = Boolean(ready);
 }
 
@@ -84,8 +86,37 @@ async function readDeploymentData(): Promise<void> {
   );
 }
 
+async function readApiSupport(): Promise<void> {
+  if (!ready) throw new Error("Ready X is not available");
+  const request = ready.features[WALLET_API].request;
+  const [chainId, specifications, walletApiVersions] = await Promise.all([
+    request({ type: "wallet_requestChainId" }),
+    request({ type: "wallet_supportedSpecs" }),
+    request({ type: "wallet_supportedWalletApi" }),
+  ]);
+  output.textContent = JSON.stringify(
+    {
+      evidence: "READY_WALLET_READ_ONLY_API_SUPPORT",
+      walletName: ready.name,
+      walletVersion: ready.features[WALLET_API].walletVersion,
+      chainId,
+      specifications,
+      walletApiVersions,
+    },
+    null,
+    2,
+  );
+}
+
 async function guarded(action: () => Promise<void>): Promise<void> {
-  for (const button of [silentButton, connectButton, deploymentButton]) button.disabled = true;
+  for (const button of [
+    silentButton,
+    connectButton,
+    deploymentButton,
+    capabilitiesButton,
+  ]) {
+    button.disabled = true;
+  }
   try {
     await action();
   } catch (error) {
@@ -102,6 +133,7 @@ async function guarded(action: () => Promise<void>): Promise<void> {
 silentButton.addEventListener("click", () => void guarded(() => connect(true)));
 connectButton.addEventListener("click", () => void guarded(() => connect(false)));
 deploymentButton.addEventListener("click", () => void guarded(readDeploymentData));
+capabilitiesButton.addEventListener("click", () => void guarded(readApiSupport));
 retryButton.addEventListener("click", () => {
   store._refreshInjectedWallets();
   refresh();
