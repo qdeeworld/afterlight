@@ -14,7 +14,9 @@ import {
 // no private key, no signing path, and no transaction-submission method.
 const clientDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const workspaceDirectory = path.dirname(clientDirectory);
-const compilerProfile = process.env.AFTERLIGHT_COMPILER_PROFILE ?? "spike-inline-8";
+// Keep the no-env path on the exact release candidate. Older tuning profiles
+// remain available only when explicitly selected for historical comparison.
+const compilerProfile = process.env.AFTERLIGHT_COMPILER_PROFILE ?? "spike-inline-56";
 const allowedProfiles = new Set([
   "release",
   "spike-size",
@@ -58,9 +60,12 @@ const provider = new RpcProvider({ nodeUrl: rpcUrl });
 // context. Set AFTERLIGHT_SIMULATION_SENDER to the intended deployer to derive
 // its exact UDC address. SKIP_VALIDATE and SKIP_FEE_CHARGE mean no account
 // secret, balance, signature, or fee is required.
-const simulationSender =
-  process.env.AFTERLIGHT_SIMULATION_SENDER ??
-  "0x0aedfe7ef03e220aba548dfc4f59c6ab8aa3030d6b8556527a6600fa87ae2d7";
+const simulationSender = process.env.AFTERLIGHT_SIMULATION_SENDER;
+if (!simulationSender) {
+  throw new Error(
+    "AFTERLIGHT_SIMULATION_SENDER is required; the UDC address is deployer-specific.",
+  );
+}
 const account = new Account({
   provider,
   address: simulationSender,
