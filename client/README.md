@@ -26,3 +26,24 @@ npm run quote:mainnet
 `AFTERLIGHT_SURPLUS_ADMIN` defaults to that same public address and may be set
 separately. The tool prints the full constructor calldata so the eventual
 wallet review can be reconciled field-for-field.
+
+## Local mainnet operator
+
+`tools/mainnet-operator.html` is an explicit, local-only declaration and
+deployment operator. It does not auto-sign or auto-submit. Before enabling its
+two wallet-impacting buttons it recomputes the Sierra and CASM hashes, derives
+the exact UDC address, verifies Mainnet, checks the intended deployer, and reads
+whether the class and contract already exist.
+
+Copy `tools/mainnet-operator-config.example.json` to the ignored
+`tools/mainnet-operator-config.local.json`, fill it from the private locked
+deployment manifest, build the selected Scarb profile, and run:
+
+```sh
+npm run operator:build
+python3 -m http.server 43118
+```
+
+Open `http://localhost:43118/client/tools/mainnet-operator.html` in the Chrome
+profile containing Ready X. A declaration or deployment still requires a
+separate, visible Ready wallet confirmation.

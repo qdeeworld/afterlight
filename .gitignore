@@ -3,6 +3,8 @@ target/
 client/node_modules/
 client/dist/
 client/tools/ready-quote.js
+client/tools/mainnet-operator.js
+client/tools/mainnet-operator-config.local.json
 .DS_Store
 *.log
 .env
