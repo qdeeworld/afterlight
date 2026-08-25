@@ -33,7 +33,9 @@ wallet review can be reconciled field-for-field.
 deployment operator. It does not auto-sign or auto-submit. Before enabling its
 two wallet-impacting buttons it recomputes the Sierra and CASM hashes, derives
 the exact UDC address, verifies Mainnet, checks the intended deployer, and reads
-whether the class and contract already exist.
+whether the class and contract already exist. Once deployed, the same read-only
+refresh fails closed unless Mainnet returns the locked class hash and all eleven
+constructor-derived configuration fields exactly.
 
 Copy `tools/mainnet-operator-config.example.json` to the ignored
 `tools/mainnet-operator-config.local.json`, fill it from the private locked

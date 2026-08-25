@@ -2,7 +2,7 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": "tools"
+    "rootDir": "."
   },
-  "include": ["tools/**/*.ts"]
+  "include": ["tools/**/*.ts", "src/**/*.ts"]
 }

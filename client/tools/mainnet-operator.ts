@@ -10,6 +10,8 @@ import {
   type CompiledSierra,
 } from "starknet";
 
+import { verifyDeploymentState, type VerifiedDeploymentState } from "../src/operator-validation.js";
+
 const READY_IDS = new Set(["ready", "readywallet", "readyx", "argentx"]);
 const CONNECT = "standard:connect";
 const WALLET_API = "starknet:walletApi";
@@ -56,6 +58,7 @@ let connectedAccount: string | undefined;
 let reviewPassed = false;
 let classDeclared = false;
 let contractDeployed = false;
+let deploymentVerification: VerifiedDeploymentState | undefined;
 
 function normalized(value: string): string {
   return num.toHex(BigInt(value)).toLowerCase();
@@ -188,7 +191,23 @@ async function refreshNetworkState(): Promise<void> {
   if (!config) throw new Error("Load the unsigned review package first.");
   const provider = new RpcProvider({ nodeUrl: config.rpcUrl });
   classDeclared = await exists(async () => provider.getClassByHash(config!.classHash));
-  contractDeployed = await exists(async () => provider.getClassHashAt(config!.deterministicAddress));
+  const deployedClassHash = await optional(async () =>
+    provider.getClassHashAt(config!.deterministicAddress),
+  );
+  contractDeployed = deployedClassHash !== undefined;
+  deploymentVerification = undefined;
+  if (deployedClassHash !== undefined) {
+    const deployedConfig = await provider.callContract({
+      contractAddress: config.deterministicAddress,
+      entrypoint: "get_config",
+    });
+    deploymentVerification = verifyDeploymentState(
+      config.classHash,
+      config.constructorCalldata,
+      deployedClassHash,
+      deployedConfig,
+    );
+  }
   output.textContent = JSON.stringify(
     {
       evidence: "AFTERLIGHT_MAINNET_READ_ONLY_STATE",
@@ -196,6 +215,9 @@ async function refreshNetworkState(): Promise<void> {
       classDeclared,
       contract: config.deterministicAddress,
       contractDeployed,
+      deploymentVerified: deploymentVerification !== undefined,
+      deployedClassHash: deploymentVerification?.classHash ?? null,
+      deployedConfig: deploymentVerification?.config ?? null,
       signed: false,
       submitted: false,
     },
@@ -270,13 +292,16 @@ async function requestDeploymentReview(): Promise<void> {
 }
 
 async function exists(action: () => Promise<unknown>): Promise<boolean> {
+  return (await optional(action)) !== undefined;
+}
+
+async function optional<T>(action: () => Promise<T>): Promise<T | undefined> {
   try {
-    await action();
-    return true;
+    return await action();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/not found|not declared|requested contract address is not deployed/i.test(message)) {
-      return false;
+      return undefined;
     }
     throw error;
   }
