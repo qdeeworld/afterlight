@@ -52,6 +52,23 @@ jobs:
           SCARB_OFFLINE: "true"
         run: scarb build
 
+      - name: Build the locked deployment profile
+        env:
+          SCARB_OFFLINE: "true"
+        run: scarb --profile spike-inline-56 build
+
+      - name: Set up Node.js for artifact verification
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.13.1
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: Verify exact deployment artifacts
+        run: |
+          npm --prefix client ci
+          npm --prefix client run verify:locked-artifacts
+
       - name: Test contracts
         # snforge compiles its Rust-side test plugin on a fresh runner, so it
         # still needs crates.io even after Scarb's Cairo dependencies resolve.

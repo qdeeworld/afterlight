@@ -18,6 +18,8 @@ method. Build the selected Scarb profile first, then set a deployed public
 account as the intended deployer to derive its exact UDC address:
 
 ```sh
+scarb --profile spike-inline-56 build
+npm run verify:locked-artifacts
 AFTERLIGHT_COMPILER_PROFILE=spike-inline-56 \
 AFTERLIGHT_SIMULATION_SENDER=0x... \
 npm run quote:mainnet

@@ -55,15 +55,21 @@ Prerequisites:
 ```bash
 scarb build
 snforge test
+scarb --profile spike-inline-56 build
 
 npm --prefix client ci
+npm --prefix client run verify:locked-artifacts
 npm --prefix client test
 
 npm --prefix relayer ci
 npm --prefix relayer test
 ```
 
-The public CI workflow runs the same Cairo, client, and relayer tests, audits both npm trees, checks relayer types and lint rules, and builds a submission-disabled Cloudflare Worker dry run.
+The public CI workflow also rebuilds the locked `spike-inline-56` deployment
+profile and verifies its exact Sierra and compiled class hashes before running
+the Cairo, client, and relayer tests. It audits both npm trees, checks relayer
+types and lint rules, and builds a submission-disabled Cloudflare Worker dry
+run.
 
 No wallet seed, application private key, or relayer secret belongs in source control. The relayer remains unable to submit transactions unless its complete production configuration is installed and its explicit submission switch is enabled.
 
