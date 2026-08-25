@@ -35,6 +35,14 @@ Afterlight does not claim legal inheritance, invisible authorization keys, or pr
 - `tests/` — Cairo unit and integration tests
 - `client/` — application keys, typed authorization messages, Ready/STRK20 action assembly
 - `relayer/` — fail-closed neutral-relayer implementation and operational controls
+- `docs/ARCHITECTURE.md` — component boundaries, action routing, state and accounting model
+- `docs/THREAT_MODEL.md` — protected assets, trust assumptions, privacy limits, and failure handling
+
+## Design documentation
+
+- [Architecture](docs/ARCHITECTURE.md)
+- [Threat model](docs/THREAT_MODEL.md)
+- [Neutral relayer operations](relayer/OPERATIONS.md)
 
 ## Build and test
 
@@ -54,6 +62,8 @@ npm --prefix client test
 npm --prefix relayer ci
 npm --prefix relayer test
 ```
+
+The public CI workflow runs the same Cairo, client, and relayer tests, audits both npm trees, checks relayer types and lint rules, and builds a submission-disabled Cloudflare Worker dry run.
 
 No wallet seed, application private key, or relayer secret belongs in source control. The relayer remains unable to submit transactions unless its complete production configuration is installed and its explicit submission switch is enabled.
 
