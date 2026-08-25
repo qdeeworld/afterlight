@@ -8,3 +8,11 @@ client/tools/ready-quote.js
 .env
 .env.*
 !.env.example
+DEMO_SCRIPT.md
+demo-script.*
+*-demo-script.*
+recording-script.*
+judge-script.*
+SUBMISSION_CHECKLIST.md
+submission-checklist.*
+docs/*SUBMISSION*.md
