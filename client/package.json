@@ -7,6 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/test/*.test.js",
     "quote:mainnet": "node tools/quote-declare-deploy.mjs",
+    "quote:ready-deploy": "node tools/quote-ready-deployment.mjs",
     "quote:ready-build": "esbuild tools/ready-deployment-data.ts --bundle --format=esm --platform=browser --outfile=tools/ready-quote.js"
   },
   "dependencies": {
