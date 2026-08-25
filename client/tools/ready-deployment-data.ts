@@ -10,6 +10,8 @@ type ReadyWallet = ReturnType<typeof createStore>["getWallets"] extends () => (i
 
 const status = required("status");
 const output = required("output");
+const walletHelp = required("wallet-help");
+const retryButton = requiredButton("retry");
 const silentButton = requiredButton("silent");
 const connectButton = requiredButton("connect");
 const deploymentButton = requiredButton("deployment");
@@ -40,6 +42,7 @@ function refresh(): void {
   silentButton.disabled = !ready;
   connectButton.disabled = !ready;
   deploymentButton.disabled = !ready;
+  walletHelp.hidden = Boolean(ready);
 }
 
 async function connect(silent: boolean): Promise<void> {
@@ -99,6 +102,7 @@ async function guarded(action: () => Promise<void>): Promise<void> {
 silentButton.addEventListener("click", () => void guarded(() => connect(true)));
 connectButton.addEventListener("click", () => void guarded(() => connect(false)));
 deploymentButton.addEventListener("click", () => void guarded(readDeploymentData));
+retryButton.addEventListener("click", refresh);
 store.subscribe(refresh);
 refresh();
 

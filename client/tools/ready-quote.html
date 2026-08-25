@@ -6,20 +6,31 @@
     <title>Afterlight — Ready X read-only quote</title>
     <style>
       body { font: 16px/1.5 system-ui, sans-serif; margin: 3rem auto; max-width: 60rem; padding: 0 1rem; }
-      button { font: inherit; margin: .5rem .5rem .5rem 0; padding: .65rem 1rem; }
+      button { font: inherit; min-height: 44px; margin: .5rem .5rem .5rem 0; padding: .65rem 1rem; }
+      button:disabled { cursor: not-allowed; opacity: .55; }
+      #wallet-help { border-left: .25rem solid #b26a00; margin: 1rem 0; padding: .25rem 1rem; }
       pre { background: #111; color: #eee; overflow: auto; padding: 1rem; white-space: pre-wrap; }
     </style>
   </head>
   <body>
     <main>
       <h1>Ready X read-only deployment quote</h1>
-      <p id="status">Discovering Ready X…</p>
+      <p id="status" role="status" aria-live="polite">Discovering Ready X…</p>
       <p>This tool requests public counterfactual deployment data only. It contains no signing or submission path.</p>
+      <section id="wallet-help">
+        <strong>Ready X is not detected in this browser profile yet.</strong>
+        <ol>
+          <li>Open this page in Chrome, not Safari.</li>
+          <li>Install or enable Ready X in this same Chrome profile.</li>
+          <li>Unlock Ready X, then reload this page or retry detection.</li>
+        </ol>
+      </section>
+      <button id="retry">Retry wallet detection</button>
       <button id="silent" disabled>Use existing authorization</button>
       <button id="connect" disabled>Connect Ready X</button>
       <button id="deployment" disabled>Read deployment data</button>
       <pre id="output">No request made.</pre>
     </main>
-    <script type="module" src="./ready-quote.js?v=2"></script>
+    <script type="module" src="./ready-quote.js?v=3"></script>
   </body>
 </html>
