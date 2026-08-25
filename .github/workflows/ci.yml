@@ -17,6 +17,9 @@ jobs:
     name: Cairo contract gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      # Keep git dependency checkouts isolated from setup-action cache restores.
+      SCARB_CACHE: ${{ runner.temp }}/afterlight-scarb-cache
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,10 +35,26 @@ jobs:
         with:
           starknet-foundry-version: 0.62.1
 
-      - name: Build contracts
+      - name: Fetch Cairo dependencies with bounded retry
+        run: |
+          for attempt in 1 2 3; do
+            if scarb fetch; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 2))
+          done
+
+      - name: Build contracts from the resolved cache
+        env:
+          SCARB_OFFLINE: "true"
         run: scarb build
 
       - name: Test contracts
+        env:
+          SCARB_OFFLINE: "true"
         run: snforge test
 
   client:
@@ -76,8 +95,12 @@ jobs:
         with:
           node-version: 22.13.1
           cache: npm
-          cache-dependency-path: relayer/package-lock.json
+          cache-dependency-path: |
+            relayer/package-lock.json
+            client/package-lock.json
 
       - run: npm ci
+      - name: Install shared client type dependencies
+        run: npm --prefix ../client ci
       - run: npm run check
       - run: npm audit --audit-level=high
