@@ -37,9 +37,10 @@ Run `npm install`, `npm run types`, then `npm run check`. `npm run dry-run` only
 omits both production secrets, uses a zero relayer address and invalid RPC, and
 keeps submission disabled. It exists only to verify Cloudflare packaging,
 bindings, migration, health behavior, and rollback without creating a signing
-or broadcast path. It also uses the account's platform CPU default because the
-Free plan rejects custom CPU limits. Production deployment must use
-`wrangler.jsonc`, satisfy its required-secret gate, and resolve the explicit
-50 ms CPU-limit plan requirement before deployment.
+or broadcast path. Both staging and production use the account's platform CPU
+default because the Free plan rejects custom CPU limits. Application-level
+payload, rate, sponsorship, transaction-fee, and receipt bounds remain
+explicit. Production deployment must use `wrangler.jsonc` and satisfy its
+required-secret gate.
 
 Production enablement, monitoring, receipt recovery, and rollback are defined in [`OPERATIONS.md`](./OPERATIONS.md).

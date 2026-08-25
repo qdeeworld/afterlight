@@ -22,6 +22,11 @@ Replace every inert value and verify it against the exact released contract:
 - per-call fee cap, daily sponsorship budget, balance alert threshold, and fee margin;
 - deployment-specific namespaces for relay, global, and checkpoint rate limits.
 
+The account's Cloudflare plan rejects custom Worker CPU limits, so the release
+uses the platform CPU default. Preserve the explicit application-level payload,
+rate, sponsorship, transaction-fee, and receipt bounds, and re-run the startup
+profile before every production deployment.
+
 Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `wrangler secret put`. Never place values in source, configuration, client variables, logs, shell history, or this document.
 
 ## Promotion sequence

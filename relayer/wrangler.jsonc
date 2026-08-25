@@ -58,9 +58,6 @@
       "simple": { "limit": 4, "period": 60 }
     }
   ],
-  "limits": {
-    "cpu_ms": 50
-  },
   "observability": {
     "enabled": true,
     "logs": {
