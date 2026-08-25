@@ -54,10 +54,12 @@ const rpcUrl =
   process.env.AFTERLIGHT_STARKNET_RPC_URL ?? "https://rpc.starknet.lava.build";
 const provider = new RpcProvider({ nodeUrl: rpcUrl });
 
-// Existing Cairo-1 public account used only to give the simulator a valid
-// execution context. SKIP_VALIDATE and SKIP_FEE_CHARGE mean no account secret,
-// balance, signature, or fee is required.
+// A deployed Cairo-1 public account gives the simulator a valid execution
+// context. Set AFTERLIGHT_SIMULATION_SENDER to the intended deployer to derive
+// its exact UDC address. SKIP_VALIDATE and SKIP_FEE_CHARGE mean no account
+// secret, balance, signature, or fee is required.
 const simulationSender =
+  process.env.AFTERLIGHT_SIMULATION_SENDER ??
   "0x0aedfe7ef03e220aba548dfc4f59c6ab8aa3030d6b8556527a6600fa87ae2d7";
 const account = new Account({
   provider,
@@ -78,7 +80,7 @@ const strk =
 const constructorCalldata = [
   pool,
   strk,
-  simulationSender,
+  process.env.AFTERLIGHT_SURPLUS_ADMIN ?? simulationSender,
   10_000_000_000_000_000_000n,
   2_592_000n,
   604_800n,
@@ -166,6 +168,7 @@ console.log(
       classHash,
       compiledClassHash,
       deterministicDeploymentAddress: deployment.addresses[0],
+      constructorCalldata,
       declarationFeeFri: declarationFee,
       declarationFeeStrk: formatStrk(declarationFee),
       deploymentFeeFri: deploymentFee,
