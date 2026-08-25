@@ -53,8 +53,8 @@ jobs:
         run: scarb build
 
       - name: Test contracts
-        env:
-          SCARB_OFFLINE: "true"
+        # snforge compiles its Rust-side test plugin on a fresh runner, so it
+        # still needs crates.io even after Scarb's Cairo dependencies resolve.
         run: snforge test
 
   client:
