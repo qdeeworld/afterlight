@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 15
     env:
       # Keep git dependency checkouts isolated from setup-action cache restores.
-      SCARB_CACHE: ${{ runner.temp }}/afterlight-scarb-cache
+      SCARB_CACHE: /tmp/afterlight-scarb-cache
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
