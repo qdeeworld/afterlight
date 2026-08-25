@@ -102,7 +102,10 @@ async function guarded(action: () => Promise<void>): Promise<void> {
 silentButton.addEventListener("click", () => void guarded(() => connect(true)));
 connectButton.addEventListener("click", () => void guarded(() => connect(false)));
 deploymentButton.addEventListener("click", () => void guarded(readDeploymentData));
-retryButton.addEventListener("click", refresh);
+retryButton.addEventListener("click", () => {
+  store._refreshInjectedWallets();
+  refresh();
+});
 store.subscribe(refresh);
 refresh();
 
