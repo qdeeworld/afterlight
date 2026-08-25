@@ -1,5 +1,4 @@
 import { createStore } from "@starknet-io/get-starknet-discovery";
-import type { CONTRACT_CLASS } from "@starknet-io/types-js";
 import {
   CallData,
   RpcProvider,
@@ -10,6 +9,7 @@ import {
   type CompiledSierra,
 } from "starknet";
 
+import { buildReadyLegacyDeclarationPayload } from "../src/operator-declaration.js";
 import { verifyDeploymentState, type VerifiedDeploymentState } from "../src/operator-validation.js";
 
 const READY_IDS = new Set(["ready", "readywallet", "readyx", "argentx"]);
@@ -20,6 +20,25 @@ const MAINNET = "0x534e5f4d41494e";
 type ReadyWallet = ReturnType<typeof createStore>["getWallets"] extends () => (infer W)[]
   ? W
   : never;
+
+type ReadyLegacyAccount = Readonly<{
+  address: string;
+  declare(payload: ReturnType<typeof buildReadyLegacyDeclarationPayload>): Promise<{
+    transaction_hash: string;
+    class_hash: string;
+  }>;
+}>;
+
+declare global {
+  interface Window {
+    starknet_argentX?: Readonly<{
+      account?: ReadyLegacyAccount;
+      chainId?: string;
+      enable(options: { starknetVersion: "v5" }): Promise<string[]>;
+      selectedAddress?: string;
+    }>;
+  }
+}
 
 type OperatorConfig = Readonly<{
   evidence: "PREPARED_NOT_SIGNED_NOT_SUBMITTED";
@@ -145,6 +164,7 @@ async function loadReviewPackage(): Promise<void> {
       constructorCalldata: loadedConfig.constructorCalldata,
       quotedDeclarationStrk: loadedConfig.quotedDeclarationStrk,
       quotedDeploymentStrk: loadedConfig.quotedDeploymentStrk,
+      declarationTransport: "ready_injected_v5_enable_then_explicit_class_hash",
       signed: false,
       submitted: false,
     },
@@ -232,18 +252,25 @@ async function requestDeclarationReview(): Promise<void> {
   if (!sierra) throw new Error("The verified Sierra artifact is unavailable.");
   await refreshNetworkState();
   if (classDeclared) throw new Error("The locked Afterlight class is already declared.");
-  if (!ready) throw new Error("Ready X is unavailable.");
-  const result = await ready.features[WALLET_API].request({
-    type: "wallet_addDeclareTransaction",
-    params: {
-      class_hash: locked.classHash,
-      compiled_class_hash: locked.compiledClassHash,
-      contract_class: {
-        ...sierra,
-        abi: JSON.stringify(sierra.abi),
-      } as CONTRACT_CLASS,
-    },
-  });
+  // Ready 5.33.9's standard wallet_addDeclareTransaction path drops class_hash
+  // and hashes an already-stringified ABI. Initialize its injected v5 account
+  // explicitly so the locked class hash reaches the review and transaction.
+  const legacy = window.starknet_argentX;
+  if (!legacy) throw new Error("Ready X did not expose its injected declaration provider.");
+  const [enabledAddress] = await legacy.enable({ starknetVersion: "v5" });
+  if (!enabledAddress || normalized(enabledAddress) !== normalized(locked.intendedDeployer)) {
+    throw new Error("Ready X initialized the wrong injected declaration account.");
+  }
+  if (!legacy.account) throw new Error("Ready X did not initialize its declaration account.");
+  if (normalized(legacy.account.address) !== normalized(locked.intendedDeployer)) {
+    throw new Error("Ready X's injected declaration account is not the locked deployer.");
+  }
+  if (legacy.chainId && normalized(legacy.chainId) !== normalized(locked.chainId)) {
+    throw new Error("Ready X's injected declaration account is not on Starknet Mainnet.");
+  }
+  const result = await legacy.account.declare(
+    buildReadyLegacyDeclarationPayload(sierra, locked.classHash, locked.compiledClassHash),
+  );
   output.textContent = JSON.stringify(
     {
       operation: "declaration_submitted_by_ready",
