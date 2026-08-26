@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { STRK20_ACTION } from "@starknet-io/types-js";
+import { constants, ec, hash, shortString } from "starknet";
 
 import {
   address,
@@ -11,7 +12,9 @@ import {
   buildCancelRefundActions,
   buildClaimActions,
   buildFundActions,
+  CANONICAL_STRK20_POOL,
   OPEN_NOTE_PLACEHOLDER,
+  PINNED_STRK20_POOL_CLASS_HASH,
   PREPARE_SIGNATURE,
   PrivateAction,
   resolvePreparedExitNoteId,
@@ -24,7 +27,14 @@ import {
 const contract = "0x1234";
 const token = "0x5678";
 const account = "0x9999";
-const pool = "0x8888";
+const pool = CANONICAL_STRK20_POOL;
+const poolClassHash = PINNED_STRK20_POOL_CLASS_HASH;
+const proofBaseBlock = Object.freeze({ number: "0xd3a000", hash: "0x123456" });
+const openNotePackedValue = 1n << 128n;
+const mainnetChainId = 0x534e5f4d41494en;
+const strkToken = 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938dn;
+const virtualProgramHash =
+  0x3e98c2d7703b03a7edb73ed7f075f97f1dcbaa8f717cdf6e1a57bf058265473n;
 
 const fund: FundArgs = {
   vault_id: "0xabc",
@@ -121,6 +131,41 @@ test("exit builders reject literal note IDs and explicit self-withdraws", () => 
   assert.throws(() => assertNoSelfWithdraw(unsafe, account), /self-withdraw is forbidden/);
 });
 
+function hex(value: bigint): string {
+  return `0x${value.toString(16)}`;
+}
+
+function noteStorageAddress(noteId: string): string {
+  const raw = BigInt(hash.computePedersenHash(hash.starknetKeccak("notes"), noteId));
+  return hex(raw % constants.ADDR_BOUND);
+}
+
+function canonicalProofFacts(serverActions: readonly string[], classHash: string): string[] {
+  const configHash = hash.computeHashOnElements([
+    shortString.encodeShortString("StarknetOsConfig3"),
+    mainnetChainId,
+    strkToken,
+  ]);
+  const payload = [BigInt(classHash), ...serverActions.map((entry) => BigInt(entry))];
+  const messageHash = ec.starkCurve.poseidonHashMany([
+    BigInt(pool),
+    0n,
+    BigInt(payload.length),
+    ...payload,
+  ]);
+  return [
+    shortString.encodeShortString("PROOF0"),
+    shortString.encodeShortString("VIRTUAL_SNOS"),
+    hex(virtualProgramHash),
+    shortString.encodeShortString("VIRTUAL_SNOS0"),
+    "0xd3a000",
+    "0x123456",
+    configHash,
+    "0x1",
+    hex(messageHash),
+  ];
+}
+
 function preparedExit(
   kind: PrivateAction.CancelRefund | PrivateAction.Claim,
   args: ExitArgs,
@@ -132,18 +177,47 @@ function preparedExit(
     entrypoint?: string;
     simulate?: boolean;
     serverActionsBefore?: readonly (readonly string[])[];
+    auditorPublicKey?: string;
+    ephemeralPublicKey?: string;
+    encryptedRecipient?: string;
+    openNoteToken?: string;
+    openNoteId?: string;
+    writeOnceStorage?: string;
+    writeOncePackedValue?: string;
+    writeOnceToken?: string;
+    screeningSuffix?: readonly string[];
+    poolClassHash?: string;
+    proofFacts?: readonly string[];
   }> = {},
 ): PreparedCallAndProof {
   const serialized = serializeExit(kind, args);
   serialized[7] = noteId;
   const invoke = ["0xa", address(options.target ?? contract), "0xb", ...serialized];
+  const writeOnce = [
+    "0x0",
+    options.writeOnceStorage ?? noteStorageAddress(noteId),
+    "0x2",
+    options.writeOncePackedValue ?? hex(openNotePackedValue),
+    address(options.writeOnceToken ?? token),
+  ];
+  const openNote = [
+    "0x7",
+    options.auditorPublicKey ?? "0xa11d",
+    options.ephemeralPublicKey ?? "0xe11e",
+    options.encryptedRecipient ?? "0xec11",
+    address(options.openNoteToken ?? token),
+    options.openNoteId ?? noteId,
+  ];
   const copies = options.copies ?? 1;
   const actions = [
+    writeOnce,
+    openNote,
     ...(options.serverActionsBefore ?? []),
     ...Array.from({ length: copies }, () => invoke),
   ];
   const serverActions = [`0x${actions.length.toString(16)}`, ...actions.flat()];
-  const calldata = [...serverActions, "0x1"];
+  const calldata = [...serverActions, ...(options.screeningSuffix ?? ["0x1"])];
+  const selectedClassHash = options.poolClassHash ?? poolClassHash;
   return {
     call: {
       contractAddress: address(options.pool ?? pool),
@@ -153,9 +227,12 @@ function preparedExit(
     proof: options.simulate
       ? { data: "", output: [], proof_facts: [] }
       : {
-          data: `proof-${noteId}`,
-          output: ["0xc1a55", ...serverActions],
-          proof_facts: ["0x2"],
+          data: "YQ==",
+          output: [selectedClassHash, ...serverActions],
+          proof_facts:
+            options.proofFacts === undefined
+              ? canonicalProofFacts(serverActions, selectedClassHash)
+              : [...options.proofFacts],
         },
   };
 }
@@ -165,10 +242,25 @@ test("resolved OPEN note is extracted from sentinel and real-signature prepared 
   const sentinelSerialized = serializeExit(PrivateAction.Claim, sentinelArgs);
   sentinelSerialized[7] = "0xdeadbeef";
   const sentinelInvoke = ["0xa", address(contract), "0xb", ...sentinelSerialized];
+  const sentinelWriteOnce = [
+    "0x0",
+    noteStorageAddress("0xdeadbeef"),
+    "0x2",
+    hex(openNotePackedValue),
+    address(token),
+  ];
+  const sentinelOpenNote = [
+    "0x7",
+    "0xa11d",
+    "0xe11e",
+    "0xec11",
+    address(token),
+    "0xdeadbeef",
+  ];
   const sentinelPreparedCall = {
     contract_address: address(pool),
     entry_point: "apply_actions",
-    calldata: ["0x1", ...sentinelInvoke, "0x1"],
+    calldata: ["0x3", ...sentinelWriteOnce, ...sentinelOpenNote, ...sentinelInvoke, "0x1"],
   };
   assert.equal(
     resolvePreparedExitNoteId(
@@ -188,6 +280,166 @@ test("resolved OPEN note is extracted from sentinel and real-signature prepared 
   );
 });
 
+test("binder allows only Ready open-note encryption randomness to change", () => {
+  const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
+  const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
+    simulate: true,
+    ephemeralPublicKey: "0x1111",
+    encryptedRecipient: "0x2222",
+  });
+  const signedPrepared = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+    ephemeralPublicKey: "0x3333",
+    encryptedRecipient: "0x4444",
+  });
+  assert.doesNotThrow(() =>
+    bindPreparedExitSubmission({
+      pool,
+      contract,
+      proofBaseBlock,
+      kind: PrivateAction.Claim,
+      sentinelArgs,
+      sentinelPrepared,
+      signedNoteId: "0xdeadbeef",
+      signedArgs: exit,
+      signedPrepared,
+    }),
+  );
+
+  for (const drift of [
+    { auditorPublicKey: "0xbad" },
+    { openNoteToken: "0x7777" },
+    { openNoteId: "0xcafebabe" },
+  ]) {
+    assert.throws(
+      () =>
+        bindPreparedExitSubmission({
+          pool,
+          contract,
+          proofBaseBlock,
+          kind: PrivateAction.Claim,
+          sentinelArgs,
+          sentinelPrepared: preparedExit(
+            PrivateAction.Claim,
+            sentinelArgs,
+            "0xdeadbeef",
+            { simulate: true },
+          ),
+          signedNoteId: "0xdeadbeef",
+          signedArgs: exit,
+          signedPrepared: preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", drift),
+        }),
+      /open-note|destination|differ at calldata/,
+    );
+  }
+});
+
+test("prepared exits require the exact source-faithful open-note action shape", () => {
+  const invalidOptions = [
+    { writeOnceStorage: "0x4455" },
+    { writeOncePackedValue: "0x0" },
+    { writeOnceToken: "0x7777" },
+  ] as const;
+  for (const options of invalidOptions) {
+    assert.throws(
+      () =>
+        resolvePreparedExitNoteId(
+          preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", options).call,
+          pool,
+          contract,
+          PrivateAction.Claim,
+          exit,
+        ),
+      /WriteOnce/,
+    );
+  }
+
+  for (const extraAction of [
+    ["0x0", noteStorageAddress("0xcafe"), "0x2", hex(openNotePackedValue), address(token)],
+    ["0x1", "0x111", "0x222", "0x333", "0x444"],
+  ]) {
+    assert.throws(
+      () =>
+        resolvePreparedExitNoteId(
+          preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+            serverActionsBefore: [extraAction],
+          }).call,
+          pool,
+          contract,
+          PrivateAction.Claim,
+          exit,
+        ),
+      /must contain exactly/,
+    );
+  }
+
+  assert.throws(
+    () =>
+      resolvePreparedExitNoteId(
+        preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+          screeningSuffix: ["0x0", "0x1", "0x2", "0x3"],
+        }).call,
+        pool,
+        contract,
+        PrivateAction.Claim,
+        exit,
+      ),
+    /Option::None/,
+  );
+});
+
+test("final proof pins the pool class and canonical ProofFacts message", () => {
+  const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
+  const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
+    simulate: true,
+  });
+  const bind = (signedPrepared: PreparedCallAndProof) =>
+    bindPreparedExitSubmission({
+      pool,
+      contract,
+      proofBaseBlock,
+      kind: PrivateAction.Claim,
+      sentinelArgs,
+      sentinelPrepared,
+      signedNoteId: "0xdeadbeef",
+      signedArgs: exit,
+      signedPrepared,
+    });
+
+  assert.throws(
+    () => bind(preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", { poolClassHash: "0x123" })),
+    /different privacy-pool class hash/,
+  );
+  assert.throws(
+    () =>
+      bind(
+        preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+          proofFacts: ["0x2"],
+        }),
+      ),
+    /canonical nine-felt layout/,
+  );
+  for (const invalidBase64 of ["not-base64", "YR==", "YWJ="]) {
+    assert.throws(
+      () => {
+        const malformed = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
+        malformed.proof.data = invalidBase64;
+        return bind(malformed);
+      },
+      /canonical standard base64/,
+    );
+  }
+
+  for (const [index, value] of [[4, "0x1"], [5, "0xdead"]] as const) {
+    const wrongBlock = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
+    wrongBlock.proof.proof_facts[index] = value;
+    assert.throws(() => bind(wrongBlock), new RegExp(`proof facts differ at field\\[${index}\\]`));
+  }
+
+  const wrongMessage = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
+  wrongMessage.proof.proof_facts[8] = "0x123";
+  assert.throws(() => bind(wrongMessage), /proof facts differ at field\[8\]/);
+});
+
 test("final signed prepare is bound to the signed note and exact wallet response", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
@@ -197,6 +449,7 @@ test("final signed prepare is bound to the signed note and exact wallet response
   const submission = bindPreparedExitSubmission({
     pool,
     contract,
+    proofBaseBlock,
     kind: PrivateAction.Claim,
     sentinelArgs,
     sentinelPrepared,
@@ -230,6 +483,7 @@ test("prepared exit binding rejects note drift and non-placeholder submit callda
       bindPreparedExitSubmission({
         pool,
         contract,
+        proofBaseBlock,
         kind: PrivateAction.Claim,
         sentinelArgs,
         sentinelPrepared,
@@ -267,6 +521,7 @@ test("final prepare cannot add a TransferTo outside the signed Afterlight Invoke
       bindPreparedExitSubmission({
         pool,
         contract,
+        proofBaseBlock,
         kind: PrivateAction.Claim,
         sentinelArgs,
         sentinelPrepared,
@@ -274,7 +529,7 @@ test("final prepare cannot add a TransferTo outside the signed Afterlight Invoke
         signedArgs: exit,
         signedPrepared,
       }),
-    /Invoke layouts differ|different lengths|differ at calldata/,
+    /must contain exactly/,
   );
 });
 
@@ -284,13 +539,14 @@ test("final proof output must be the prepared call's exact ServerAction prefix",
     simulate: true,
   });
   const signedPrepared = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
-  signedPrepared.proof.output = ["0xdead", "0x1"];
+  signedPrepared.proof.output[5] = "0xdead";
 
   assert.throws(
     () =>
       bindPreparedExitSubmission({
         pool,
         contract,
+        proofBaseBlock,
         kind: PrivateAction.Claim,
         sentinelArgs,
         sentinelPrepared,
@@ -298,7 +554,7 @@ test("final proof output must be the prepared call's exact ServerAction prefix",
         signedArgs: exit,
         signedPrepared,
       }),
-    /proof output does not match the prepared ServerActions/,
+    /proof output differs at ServerActions/,
   );
 });
 
@@ -313,6 +569,7 @@ test("simulated final proof cannot bind and an accepted response is deeply immut
       bindPreparedExitSubmission({
         pool,
         contract,
+        proofBaseBlock,
         kind: PrivateAction.Claim,
         sentinelArgs,
         sentinelPrepared,
@@ -327,6 +584,7 @@ test("simulated final proof cannot bind and an accepted response is deeply immut
   const submission = bindPreparedExitSubmission({
     pool,
     contract,
+    proofBaseBlock,
     kind: PrivateAction.Claim,
     sentinelArgs,
     sentinelPrepared,
@@ -360,11 +618,11 @@ test("prepared exit parser rejects multiple invokes, wrong pool, target, and ent
         PrivateAction.Claim,
         exit,
       ),
-    /found 2/,
+    /must contain exactly/,
   );
   assert.throws(
     () => resolvePreparedExitNoteId(prepared.call, "0x7777", contract, PrivateAction.Claim, exit),
-    /wrong privacy pool/,
+    /locked canonical mainnet privacy pool/,
   );
   assert.throws(
     () =>

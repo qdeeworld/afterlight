@@ -1,5 +1,5 @@
 import type { STRK20_ACTION } from "@starknet-io/types-js";
-import type { STRK20_CALL_AND_PROOF } from "starknet";
+import { constants, ec, hash, shortString, type STRK20_CALL_AND_PROOF } from "starknet";
 
 import { address, felt, toBigInt, u64, u128, type FeltInput } from "./encoding.js";
 
@@ -12,6 +12,24 @@ export enum PrivateAction {
 
 export const OPEN_NOTE_PLACEHOLDER = "${openNoteIds[0]}" as const;
 export const PREPARE_SIGNATURE = Object.freeze({ sig_r: "0x1", sig_s: "0x1" });
+
+/** Mainnet protocol locks. A pool class change requires a reviewed client release. */
+export const CANONICAL_STRK20_POOL =
+  "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
+export const PINNED_STRK20_POOL_CLASS_HASH =
+  "0x067dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d";
+
+const STARKNET_MAINNET_CHAIN_ID = 0x534e5f4d41494en;
+const STRK_TOKEN = 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938dn;
+const OPEN_NOTE_PACKED_VALUE = 1n << 128n;
+const PROOF_VERSION = toBigInt(shortString.encodeShortString("PROOF0"));
+const VIRTUAL_SNOS = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS"));
+const VIRTUAL_SNOS0 = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS0"));
+const VIRTUAL_PROGRAM_HASH =
+  0x3e98c2d7703b03a7edb73ed7f075f97f1dcbaa8f717cdf6e1a57bf058265473n;
+const STARKNET_OS_CONFIG_HASH_VERSION = toBigInt(
+  shortString.encodeShortString("StarknetOsConfig3"),
+);
 
 /** The wallet API may expose its prepared call in wire or Starknet.js form. */
 export type PreparedPoolCall =
@@ -122,7 +140,11 @@ function validatePreparedExit(
   }
 
   const normalized = normalizePreparedPoolCall(preparedCall);
-  if (normalized.pool !== address(pool, "privacy pool")) {
+  const requestedPool = address(pool, "privacy pool");
+  if (requestedPool !== CANONICAL_STRK20_POOL) {
+    throw new Error("prepared exits require the locked canonical mainnet privacy pool");
+  }
+  if (normalized.pool !== requestedPool) {
     throw new Error("prepared call targets the wrong privacy pool");
   }
   if (normalized.entrypoint !== "apply_actions") {
@@ -130,8 +152,24 @@ function validatePreparedExit(
   }
 
   const parsed = parseServerInvokes(normalized.calldata);
+  const exactVariants = [0n, 7n, 10n];
+  if (
+    parsed.actions.length !== exactVariants.length ||
+    parsed.actions.some((action, index) => action.variant !== exactVariants[index])
+  ) {
+    throw new Error("prepared exit must contain exactly WriteOnce, EmitOpenNoteCreated, Invoke");
+  }
+  if (parsed.writeOnceActions.length !== 1) {
+    throw new Error(`expected one prepared note WriteOnce, found ${parsed.writeOnceActions.length}`);
+  }
+  if (parsed.openNotes.length !== 1) {
+    throw new Error(`expected one prepared open note, found ${parsed.openNotes.length}`);
+  }
   if (parsed.invokes.length !== 1) {
     throw new Error(`expected one prepared pool Invoke action, found ${parsed.invokes.length}`);
+  }
+  if (parsed.actions.at(-1)?.variant !== 10n) {
+    throw new Error("prepared Afterlight Invoke must be the final ServerAction");
   }
   const invoke = parsed.invokes[0]!;
   if (invoke.target !== address(contract, "Afterlight contract")) {
@@ -151,10 +189,35 @@ function validatePreparedExit(
       throw new Error(`prepared Afterlight exit differs at calldata[${index}]`);
     }
   }
+  const openNote = parsed.openNotes[0]!;
+  if (openNote.actionIndex >= invoke.actionIndex) {
+    throw new Error("prepared open note must precede the Afterlight Invoke");
+  }
+  if (openNote.token !== address(args.token, "open-note token")) {
+    throw new Error("prepared open-note token differs from the signed exit token");
+  }
+  if (openNote.noteId !== felt(raw[7]!, "resolved note id")) {
+    throw new Error("prepared open-note ID differs from the signed helper destination");
+  }
+  const writeOnce = parsed.writeOnceActions[0]!;
+  const noteId = toBigInt(openNote.noteId, "prepared open-note ID");
+  if (writeOnce.storageAddress !== notesStorageAddress(noteId)) {
+    throw new Error("prepared note WriteOnce targets the wrong storage address");
+  }
+  if (
+    writeOnce.value.length !== 2 ||
+    writeOnce.value[0] !== OPEN_NOTE_PACKED_VALUE ||
+    writeOnce.value[1] !== toBigInt(openNote.token, "prepared open-note token")
+  ) {
+    throw new Error("prepared note WriteOnce has the wrong open-note value");
+  }
   return {
-    noteId: felt(raw[7]!, "resolved note id"),
+    noteId: felt(noteId, "resolved note id"),
     normalized,
     invoke,
+    openNote,
+    writeOnce,
+    actions: parsed.actions,
     actionsEnd: parsed.actionsEnd,
   };
 }
@@ -175,6 +238,7 @@ export type PreparedExitSubmission = Readonly<{
 export type BindPreparedExitSubmissionArgs = Readonly<{
   pool: FeltInput;
   contract: FeltInput;
+  proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>;
   kind: PrivateAction.CancelRefund | PrivateAction.Claim;
   sentinelArgs: ExitArgs;
   sentinelPrepared: PreparedCallAndProof;
@@ -186,7 +250,13 @@ export type BindPreparedExitSubmissionArgs = Readonly<{
 /**
  * Bind the real proof to the note signed after the sentinel prepare. Both
  * action sets retain OPEN_NOTE_PLACEHOLDER; only the prepared calls contain the
- * concrete note id. The returned handle remembers the exact wallet response.
+ * concrete note id. Ready recompiles CreateOpenNote with fresh encryption
+ * randomness, so the two calls are compared semantically while the exact final
+ * call/proof object is frozen for submission. The caller must prevent any
+ * intervening wallet action that could advance the recipient channel's token
+ * note index and therefore change the note id. `proofBaseBlock` must come from
+ * an independent mainnet RPC lookup of the block identified by the proof facts;
+ * copying those two fields out of the proof does not establish canonicality.
  */
 export function bindPreparedExitSubmission(
   input: BindPreparedExitSubmissionArgs,
@@ -228,7 +298,7 @@ export function bindPreparedExitSubmission(
   }
   assertEquivalentPreparedExitCalls(sentinelExit, signedExit);
   assertOptionalProofOutputMatchesCall(input.sentinelPrepared, sentinelExit);
-  assertSubmittableProof(input.signedPrepared, signedExit);
+  assertSubmittableProof(input.signedPrepared, signedExit, input.proofBaseBlock);
   freezePreparedResponse(input.signedPrepared);
 
   return Object.freeze({
@@ -369,10 +439,33 @@ type ParsedInvoke = Readonly<{
   target: string;
   calldata: readonly bigint[];
   calldataStart: number;
+  actionIndex: number;
+}>;
+
+type ParsedOpenNote = Readonly<{
+  token: string;
+  noteId: string;
+  actionIndex: number;
+  randomizedOffsets: readonly number[];
+}>;
+
+type ParsedWriteOnce = Readonly<{
+  storageAddress: bigint;
+  value: readonly bigint[];
+  actionIndex: number;
+}>;
+
+type ParsedServerAction = Readonly<{
+  variant: bigint;
+  start: number;
+  end: number;
 }>;
 
 type ParsedServerInvokes = Readonly<{
   invokes: readonly ParsedInvoke[];
+  openNotes: readonly ParsedOpenNote[];
+  writeOnceActions: readonly ParsedWriteOnce[];
+  actions: readonly ParsedServerAction[];
   actionsEnd: number;
 }>;
 
@@ -380,6 +473,9 @@ type ValidatedPreparedExit = Readonly<{
   noteId: string;
   normalized: NormalizedPreparedPoolCall;
   invoke: ParsedInvoke;
+  openNote: ParsedOpenNote;
+  writeOnce: ParsedWriteOnce;
+  actions: readonly ParsedServerAction[];
   actionsEnd: number;
 }>;
 
@@ -434,6 +530,27 @@ function assertEquivalentPreparedExitCalls(
   if (sentinel.invoke.calldataStart !== signed.invoke.calldataStart) {
     throw new Error("sentinel and final prepared Invoke layouts differ");
   }
+  if (
+    sentinel.actions.length !== signed.actions.length ||
+    sentinel.actions.some((action, index) => {
+      const candidate = signed.actions[index];
+      return (
+        candidate === undefined ||
+        action.variant !== candidate.variant ||
+        action.start !== candidate.start ||
+        action.end !== candidate.end
+      );
+    })
+  ) {
+    throw new Error("sentinel and final prepared ServerAction layouts differ");
+  }
+  if (
+    sentinel.openNote.token !== signed.openNote.token ||
+    sentinel.openNote.noteId !== signed.openNote.noteId ||
+    sentinel.openNote.actionIndex !== signed.openNote.actionIndex
+  ) {
+    throw new Error("sentinel and final prepared open-note semantics differ");
+  }
 
   const sentinelRaw = sentinel.normalized.calldata;
   const signedRaw = signed.normalized.calldata;
@@ -445,6 +562,16 @@ function assertEquivalentPreparedExitCalls(
     sentinel.invoke.calldataStart + 9,
     sentinel.invoke.calldataStart + 10,
   ]);
+  const randomizedOpenNoteOffsets = sentinel.openNote.randomizedOffsets;
+  if (
+    randomizedOpenNoteOffsets.length !== signed.openNote.randomizedOffsets.length ||
+    randomizedOpenNoteOffsets.some(
+      (offset, index) => offset !== signed.openNote.randomizedOffsets[index],
+    )
+  ) {
+    throw new Error("sentinel and final prepared open-note layouts differ");
+  }
+  for (const offset of randomizedOpenNoteOffsets) signatureOffsets.add(offset);
   for (let index = 0; index < sentinelRaw.length; index += 1) {
     if (!signatureOffsets.has(index) && sentinelRaw[index] !== signedRaw[index]) {
       throw new Error(`sentinel and final prepared pool calls differ at calldata[${index}]`);
@@ -455,6 +582,7 @@ function assertEquivalentPreparedExitCalls(
 function assertSubmittableProof(
   prepared: PreparedCallAndProof,
   validated: ValidatedPreparedExit,
+  proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>,
 ): void {
   const { proof } = prepared;
   if (
@@ -462,10 +590,12 @@ function assertSubmittableProof(
     proof.data.length === 0 ||
     !Array.isArray(proof.output) ||
     proof.output.length < 2 ||
-    !Array.isArray(proof.proof_facts) ||
-    proof.proof_facts.length === 0
+    !Array.isArray(proof.proof_facts)
   ) {
     throw new Error("final signed prepare must contain a non-empty submittable STRK20 proof");
+  }
+  if (!isCanonicalBase64(proof.data)) {
+    throw new Error("final signed prepare proof data must be canonical standard base64");
   }
   proof.output.forEach((entry, index) =>
     toBigInt(asFeltInput(entry, `proof output[${index}]`), `proof output[${index}]`),
@@ -474,6 +604,25 @@ function assertSubmittableProof(
     toBigInt(asFeltInput(entry, `proof fact[${index}]`), `proof fact[${index}]`),
   );
   assertProofOutputMatchesCall(prepared, validated);
+  assertCanonicalProofFacts(prepared, validated, proofBaseBlock);
+}
+
+function isCanonicalBase64(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+  ) {
+    return false;
+  }
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  if (value.endsWith("==")) {
+    return (alphabet.indexOf(value[value.length - 3]!) & 0x0f) === 0;
+  }
+  if (value.endsWith("=")) {
+    return (alphabet.indexOf(value[value.length - 2]!) & 0x03) === 0;
+  }
+  return true;
 }
 
 function assertOptionalProofOutputMatchesCall(
@@ -503,6 +652,9 @@ function assertProofOutputMatchesCall(
   if (output.length < 2) {
     throw new Error("prepared proof output must contain a class hash and ServerActions");
   }
+  if (output[0] !== toBigInt(PINNED_STRK20_POOL_CLASS_HASH, "pinned pool class hash")) {
+    throw new Error("prepared proof output uses a different privacy-pool class hash");
+  }
 
   const expectedActions = validated.normalized.calldata.slice(0, validated.actionsEnd);
   if (output.length !== expectedActions.length + 1) {
@@ -511,6 +663,60 @@ function assertProofOutputMatchesCall(
   for (let index = 0; index < expectedActions.length; index += 1) {
     if (output[index + 1] !== expectedActions[index]) {
       throw new Error(`prepared proof output differs at ServerActions[${index}]`);
+    }
+  }
+}
+
+/** Validate the pinned nine-felt blockifier/Cairo ProofFacts serialization. */
+function assertCanonicalProofFacts(
+  prepared: PreparedCallAndProof,
+  validated: ValidatedPreparedExit,
+  proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>,
+): void {
+  const facts = prepared.proof.proof_facts.map((entry, index) =>
+    toBigInt(asFeltInput(entry, `proof fact[${index}]`), `proof fact[${index}]`),
+  );
+  if (facts.length !== 9) {
+    throw new Error("prepared proof facts must use the canonical nine-felt layout");
+  }
+  const expectedBaseBlockNumber = u64(proofBaseBlock.number, "expected proof base block number");
+  const expectedBaseBlockHash = toBigInt(proofBaseBlock.hash, "expected proof base block hash");
+  if (expectedBaseBlockNumber === 0n || expectedBaseBlockHash === 0n) {
+    throw new Error("proof base block must identify a nonzero mainnet block");
+  }
+
+  const configHash = toBigInt(
+    hash.computeHashOnElements([
+      STARKNET_OS_CONFIG_HASH_VERSION,
+      STARKNET_MAINNET_CHAIN_ID,
+      STRK_TOKEN,
+    ]),
+    "Starknet OS config hash",
+  );
+  const actions = validated.normalized.calldata.slice(0, validated.actionsEnd);
+  const poolClassHash = toBigInt(PINNED_STRK20_POOL_CLASS_HASH, "pinned pool class hash");
+  const payload = [poolClassHash, ...actions];
+  const messageHash = ec.starkCurve.poseidonHashMany([
+    toBigInt(CANONICAL_STRK20_POOL, "canonical pool"),
+    0n,
+    BigInt(payload.length),
+    ...payload,
+  ]);
+  const expected = [
+    PROOF_VERSION,
+    VIRTUAL_SNOS,
+    VIRTUAL_PROGRAM_HASH,
+    VIRTUAL_SNOS0,
+    expectedBaseBlockNumber,
+    expectedBaseBlockHash,
+    configHash,
+    1n,
+    messageHash,
+  ] as const;
+  for (let index = 0; index < expected.length; index += 1) {
+    const value = expected[index];
+    if (value !== undefined && facts[index] !== value) {
+      throw new Error(`prepared proof facts differ at field[${index}]`);
     }
   }
 }
@@ -524,6 +730,15 @@ function freezePreparedResponse(prepared: PreparedCallAndProof): void {
   Object.freeze(prepared.proof.proof_facts);
   Object.freeze(prepared.proof);
   Object.freeze(prepared);
+}
+
+/** Cairo StoragePath(`notes`).entry(noteId): Pedersen(sn_keccak("notes"), noteId). */
+function notesStorageAddress(noteId: bigint): bigint {
+  const raw = toBigInt(
+    hash.computePedersenHash(hash.starknetKeccak("notes"), noteId),
+    "prepared note storage address",
+  );
+  return raw % constants.ADDR_BOUND;
 }
 
 /** Decode enough of the current pool ServerAction ABI to locate top-level Invoke actions. */
@@ -551,12 +766,26 @@ function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
 
   const actionCount = count("server action count");
   const invokes: ParsedInvoke[] = [];
+  const openNotes: ParsedOpenNote[] = [];
+  const writeOnceActions: ParsedWriteOnce[] = [];
+  const actions: ParsedServerAction[] = [];
   for (let actionIndex = 0; actionIndex < actionCount; actionIndex += 1) {
+    const actionStart = cursor;
     const variant = take(`server action[${actionIndex}] variant`);
     switch (variant) {
       case 0n: { // WriteOnce(storage_address, Span<felt252>)
-        skip(1, `server action[${actionIndex}] storage address`);
-        skip(count(`server action[${actionIndex}] value length`), `server action[${actionIndex}] value`);
+        const storageAddress = take(`server action[${actionIndex}] storage address`);
+        const valueLength = count(`server action[${actionIndex}] value length`);
+        const end = cursor + valueLength;
+        if (end > raw.length) {
+          throw new Error(`truncated prepared pool calldata at server action[${actionIndex}] value`);
+        }
+        writeOnceActions.push({
+          storageAddress,
+          value: raw.slice(cursor, end),
+          actionIndex,
+        });
+        cursor = end;
         break;
       }
       case 1n: // Append(recipient_addr, EncChannelInfo)
@@ -568,9 +797,29 @@ function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
         skip(3, `server action[${actionIndex}] fixed fields`);
         break;
       case 4n: // EmitViewingKeySet(user_addr, public_key, EncPrivateKey)
-      case 7n: // EmitOpenNoteCreated(EncUserAddr, token, note_id)
         skip(5, `server action[${actionIndex}] fixed fields`);
         break;
+      case 7n: { // EmitOpenNoteCreated(EncUserAddr, token, note_id)
+        const fieldsStart = cursor;
+        const auditorPublicKey = take(`server action[${actionIndex}] auditor public key`);
+        const ephemeralPublicKey = take(`server action[${actionIndex}] ephemeral public key`);
+        const encryptedRecipient = take(`server action[${actionIndex}] encrypted recipient`);
+        const token = take(`server action[${actionIndex}] open-note token`);
+        const noteId = take(`server action[${actionIndex}] open-note ID`);
+        // The first, fourth, and fifth fields are semantic. Ready recompiles
+        // each prepare with fresh encryption randomness, so only the
+        // ephemeral key and ciphertext are expected to differ.
+        void auditorPublicKey;
+        void ephemeralPublicKey;
+        void encryptedRecipient;
+        openNotes.push({
+          token: address(token, "prepared open-note token"),
+          noteId: felt(noteId, "prepared open-note ID"),
+          actionIndex,
+          randomizedOffsets: Object.freeze([fieldsStart + 1, fieldsStart + 2]),
+        });
+        break;
+      }
       case 5n: // EmitWithdrawal(EncUserAddr, to_addr, token, amount)
         skip(6, `server action[${actionIndex}] fixed fields`);
         break;
@@ -590,7 +839,7 @@ function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
           throw new Error(`truncated prepared pool calldata at server action[${actionIndex}] calldata`);
         }
         if (variant === 10n) {
-          invokes.push({ target, calldata: raw.slice(cursor, end), calldataStart });
+          invokes.push({ target, calldata: raw.slice(cursor, end), calldataStart, actionIndex });
         }
         cursor = end;
         break;
@@ -598,11 +847,12 @@ function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
       default:
         throw new Error(`unknown prepared pool ServerAction variant ${variant}`);
     }
+    actions.push({ variant, start: actionStart, end: cursor });
   }
 
   const suffix = raw.slice(cursor);
-  const none = suffix.length === 1 && suffix[0] === 1n;
-  const some = suffix.length === 4 && suffix[0] === 0n;
-  if (!none && !some) throw new Error("prepared pool call has a malformed screening suffix");
-  return { invokes, actionsEnd: cursor };
+  if (suffix.length !== 1 || suffix[0] !== 1n) {
+    throw new Error("prepared no-deposit exit requires an exact Option::None screening suffix");
+  }
+  return { invokes, openNotes, writeOnceActions, actions, actionsEnd: cursor };
 }
