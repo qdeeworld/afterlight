@@ -53,7 +53,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 ## Monitoring and alerts
 
 The public repository's `Inert relayer staging health` workflow checks the
-provider-only Phase A endpoint every 30 minutes while submission is disabled.
+provider-only inert staging endpoint every 30 minutes while submission is disabled.
 It verifies the fail-closed executor state, privacy response, and security
 headers. Replace that staging check with production health and alerting during
 promotion; a green inert check is never production readiness evidence.
@@ -67,7 +67,21 @@ Monitor through at least 2026-09-04:
 - RPC error rate and checkpoint/control success rate without payload logging;
 - Worker and Pages deployment versions matching the recorded release commit.
 
-Do not log request bodies, signatures, IP addresses, wallet addresses, application keys, vault IDs, transaction fingerprints, RPC authorization, or exact private-flow timing correlations.
+The bounded lifecycle uses two funding checkpoints plus `HEARTBEAT`, two
+`REQUEST` calls, and `VETO`. With the current 0.2 STRK per-call ceiling, the
+daily sponsorship budget is 1.2 STRK so all six can fit without silently
+contradicting the per-call policy. Replace caps only from fresh quotes; never
+enable a daily budget smaller than the quoted lifecycle or larger than the
+funded operational bound.
+
+Do not log request bodies, signatures, IP addresses, wallet addresses,
+application keys, vault IDs, transaction fingerprints, RPC authorization, or
+exact private-flow timing correlations. Disable or minimize Cloudflare request
+logging and analytics where configurable, prohibit body capture, use the
+shortest operational retention available, and never export a dataset that can
+join connection metadata to a vault. Cloudflare, DNS, network, and RPC systems
+may still transiently process routing, timing, connection, relayer-account, and
+transaction metadata; the no-log policy does not claim otherwise.
 
 ## Rollback
 

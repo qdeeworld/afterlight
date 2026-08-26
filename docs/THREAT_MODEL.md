@@ -27,11 +27,19 @@ The following remain public:
 - neutral-relayer and helper transactions;
 - the fact that an exact open note was created.
 
-Afterlight does not claim to hide amounts or timing, make authorization keys invisible, prove that a hidden note belongs to a precommitted wallet, or automate legal inheritance.
+The onchain STRK20 withdrawal event encrypts the originating user address from
+public observers while exposing destination, token, amount, and timing. The
+STRK20 auditor can decrypt that address, and Ready/paymaster/network
+infrastructure may process correlating metadata. Afterlight therefore claims
+public-onchain unlinkability only. It does not claim to hide amounts or timing,
+make authorization keys invisible, prove that a hidden note belongs to a
+precommitted wallet, provide privacy from protocol infrastructure, or automate
+legal inheritance.
 
 ## Trust and dependency assumptions
 
 - Ready X protects wallet and viewing-key material and correctly implements the advertised STRK20 Wallet API.
+- The STRK20 auditor and Ready/paymaster infrastructure are trusted with the protocol metadata they necessarily process; they are outside the public-observer privacy claim.
 - The live STRK20 pool verifies proofs, charges its configured fee, and applies actions atomically.
 - Starknet provides transaction ordering and state rollback on revert.
 - The user's device protects the per-vault owner or successor secret and its backup.
@@ -55,14 +63,38 @@ Relayer availability is operationally important but not trusted for correctness.
 | Double claim or replay | Role nonce consumption and terminal vault state |
 | Owner veto races a mature claim | First valid included transition wins; the other sees changed state |
 | Failed token/pool settlement leaves false state | Cairo transaction rollback restores state and liability |
+| Surplus administrator is compromised | `recover_surplus` is public and privileged but can transfer only `held - locked`; it cannot alter vaults or withdraw accounted liabilities |
 | Relayer drains sponsorship | Schema limits, expiry, rate limits, per-call cap, daily budget, nonce serialization, and breach freeze |
-| Logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from logs |
+| Application logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from application logs; infrastructure metadata remains a separate limit |
+
+## Relayer and hosting metadata boundary
+
+The application no-log policy means Afterlight's Worker code must not emit
+request bodies, signatures, IP addresses, wallet addresses, application keys,
+vault IDs, fingerprints, RPC authorization, or exact private-flow timing. The
+relayer necessarily receives the signed public authorization fields needed for
+contract submission, including a vault identifier; "not logged" does not mean
+"not processed."
+
+Cloudflare, DNS, network, and RPC infrastructure may transiently process source
+IP, user agent, TLS, routing, request timing, relayer account, and transaction
+metadata. The RPC provider also observes the relayer's public calls. Deployment
+must disable or minimize request logging and analytics where configurable,
+avoid payload capture, use the shortest operational retention available, and
+never build an IP-to-vault or wallet-to-vault correlation store. These controls
+reduce retained metadata; they cannot promise that hosting or network metadata
+never exists. Public state-transition timing can still support correlation.
 
 ## Key separation
 
 The owner and successor each generate a fresh application key per vault. The successor secret is generated and retained only by the successor. Ready account keys, application keys, destination notes, and the neutral relayer key remain separate.
 
 Loss of an application secret can make its role unavailable. Compromise can authorize only operations within the signed domain and current contract state; it does not reveal a Ready seed or permit changing the exact destination of an already signed claim.
+
+The `surplus_admin` is not a vault owner or recovery authority. It is trusted
+only to choose where donated/unaccounted token surplus goes. Its address and
+recoveries are public, and users should not intentionally send donations to the
+contract expecting a refund.
 
 ## Tested failure classes
 

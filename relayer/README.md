@@ -1,6 +1,12 @@
-# Afterlight neutral relayer — Phase A
+# Afterlight neutral relayer (E1/pre-production)
 
-This directory is a no-deploy, no-funds proof of the neutral control-plane relayer. It consumes the canonical `afterlight-relay/1` schema from `../client`, accepts only `HEARTBEAT`, `REQUEST`, and `VETO`, and includes an inert Starknet v3 signer/RPC adapter that remains unreachable until every production setting and secret is present and `SUBMIT_ENABLED=true`.
+This directory contains the tested neutral control-plane relayer implementation.
+It consumes the canonical `afterlight-relay/1` schema from `../client`, accepts
+only `HEARTBEAT`, `REQUEST`, and `VETO`, and includes a fail-closed Starknet v3
+signer/RPC adapter. An inert, submission-disabled staging Worker exercises
+packaging and health monitoring, but there is no funded or production relayer
+and no live recovery service. The signing path remains unreachable until every
+production setting and secret is present and `SUBMIT_ENABLED=true`.
 
 ## Proven locally
 
@@ -13,7 +19,7 @@ This directory is a no-deploy, no-funds proof of the neutral control-plane relay
 - Separate semantic and exact-call fingerprints: changing only expiry or signature cannot create a second operation, while simulation, submission, and receipts must still match the exact calldata.
 - Atomic `RESERVED → SUBMITTED(tx hash) → COMMITTED | REVERTED | BREACHED` reconciliation. Simulation failure spends nothing; a proven pre-submit failure releases; ambiguous receipt state remains submitted with its hash; reverted transactions remain terminal.
 - Accepted fees above their reservation are recorded in full and atomically freeze all new sponsorship as an accounting invariant breach.
-- No owner or successor application secret, Ready address, wallet address, client IP, payload, signature, or vault identifier is logged.
+- No owner or successor application secret, Ready address, wallet address, client IP, payload, signature, or vault identifier is emitted by application logging.
 - Health exposes only readiness booleans and a balance threshold state, never the relayer address, exact balance, RPC endpoint, secret material, request fingerprint, or request data.
 - The Cairo contract remains authoritative: the executor simulates the exact call, atomically reserves its maximum fee, and only then signs with the neutral relayer account.
 - Starknet v3 simulation freezes the nonce and exact resource bounds. The budget reserves a larger policy maximum; signing reuses the frozen bounds without estimating again and rejects encoded exposure above the reservation.
@@ -22,7 +28,9 @@ This directory is a no-deploy, no-funds proof of the neutral control-plane relay
 
 ## Production blockers (intentional)
 
-Do not set `SUBMIT_ENABLED=true` on this Phase A Worker. The adapter exists for static review and local tests, but the checked-in configuration is deliberately non-executable. Before funded Phase B:
+Do not set `SUBMIT_ENABLED=true` on the checked-in pre-production Worker. The
+adapter exists for static review and local tests, but the checked-in
+configuration is deliberately non-executable. Before funded Phase B:
 
 1. Replace `DEPLOYMENT_ID`, stage, contract, origin, RPC URL, relayer account, and both rate-limit namespace IDs with deployment-specific values.
 2. Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` through `wrangler secret put`; never put their values in source, config, logs, or client variables.
@@ -31,7 +39,9 @@ Do not set `SUBMIT_ENABLED=true` on this Phase A Worker. The adapter exists for 
 5. Confirm the ordinary owner Ready address never submits the public checkpoint; only the neutral relayer may call it immediately before a private FUND.
 6. Only then install the secrets and enable submission in a reviewed promotion commit. A flag without complete configuration still fails closed.
 
-Run `npm install`, `npm run types`, then `npm run check`. `npm run dry-run` only bundles locally; nothing is deployed.
+Run `npm ci`, then `npm run check`. The tested toolchain is Node.js `22.13.1`
+with the committed npm lockfile and Wrangler `4.125.0`. `npm run dry-run` only
+bundles locally; nothing is deployed.
 
 `wrangler.staging.jsonc` is a separate inert deployment profile. It deliberately
 omits both production secrets, uses a zero relayer address and invalid RPC, and
@@ -44,3 +54,14 @@ explicit. Production deployment must use `wrangler.jsonc` and satisfy its
 required-secret gate.
 
 Production enablement, monitoring, receipt recovery, and rollback are defined in [`OPERATIONS.md`](./OPERATIONS.md).
+
+## Metadata limit
+
+The no-log rule applies to Afterlight application logging. The Worker must
+process signed public authorization fields, and Cloudflare, DNS, network, and
+RPC infrastructure may transiently process connection, routing, timing,
+relayer-account, and transaction metadata. Production must disable or minimize
+request logging and analytics where configurable, prohibit payload capture,
+retain only the minimum operational data, and never join an IP or wallet to a
+vault. This reduces retained correlations but does not make hosting metadata
+nonexistent. See the [threat model](../docs/THREAT_MODEL.md#relayer-and-hosting-metadata-boundary).

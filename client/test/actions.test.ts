@@ -6,9 +6,9 @@ import { constants, ec, hash, shortString } from "starknet";
 
 import {
   address,
-  assertExactPreparedExitSubmission,
+  assertExactDappSubmittedPreparedExit,
   assertNoSelfWithdraw,
-  bindPreparedExitSubmission,
+  bindDappSubmittedPreparedExit,
   buildCancelRefundActions,
   buildClaimActions,
   buildFundActions,
@@ -18,7 +18,9 @@ import {
   PREPARE_SIGNATURE,
   PrivateAction,
   resolvePreparedExitNoteId,
+  resolveSimulatedPreparedExitNoteId,
   serializeExit,
+  validatePreparedExitProofEnvelope,
   type ExitArgs,
   type FundArgs,
   type PreparedCallAndProof,
@@ -216,7 +218,10 @@ function preparedExit(
     ...Array.from({ length: copies }, () => invoke),
   ];
   const serverActions = [`0x${actions.length.toString(16)}`, ...actions.flat()];
-  const calldata = [...serverActions, ...(options.screeningSuffix ?? ["0x1"])];
+  const calldata = [
+    ...serverActions,
+    ...(options.screeningSuffix ?? (options.simulate ? [] : ["0x1"])),
+  ];
   const selectedClassHash = options.poolClassHash ?? poolClassHash;
   return {
     call: {
@@ -280,7 +285,7 @@ test("resolved OPEN note is extracted from sentinel and real-signature prepared 
   );
 });
 
-test("binder allows only Ready open-note encryption randomness to change", () => {
+test("proof-envelope validator allows only Ready open-note encryption randomness to change", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
     simulate: true,
@@ -292,7 +297,7 @@ test("binder allows only Ready open-note encryption randomness to change", () =>
     encryptedRecipient: "0x4444",
   });
   assert.doesNotThrow(() =>
-    bindPreparedExitSubmission({
+    validatePreparedExitProofEnvelope({
       pool,
       contract,
       proofBaseBlock,
@@ -312,7 +317,7 @@ test("binder allows only Ready open-note encryption randomness to change", () =>
   ]) {
     assert.throws(
       () =>
-        bindPreparedExitSubmission({
+        validatePreparedExitProofEnvelope({
           pool,
           contract,
           proofBaseBlock,
@@ -331,6 +336,34 @@ test("binder allows only Ready open-note encryption randomness to change", () =>
       /open-note|destination|differ at calldata/,
     );
   }
+});
+
+test("simulate=true sentinel may omit screening suffix while strict final parsing may not", () => {
+  const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
+  const suffixless = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
+    simulate: true,
+  });
+  assert.equal(
+    resolveSimulatedPreparedExitNoteId(
+      suffixless,
+      pool,
+      contract,
+      PrivateAction.Claim,
+      sentinelArgs,
+    ),
+    "0xdeadbeef",
+  );
+  assert.throws(
+    () =>
+      resolvePreparedExitNoteId(
+        suffixless.call,
+        pool,
+        contract,
+        PrivateAction.Claim,
+        sentinelArgs,
+      ),
+    /Option::None/,
+  );
 });
 
 test("prepared exits require the exact source-faithful open-note action shape", () => {
@@ -392,8 +425,8 @@ test("final proof pins the pool class and canonical ProofFacts message", () => {
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
     simulate: true,
   });
-  const bind = (signedPrepared: PreparedCallAndProof) =>
-    bindPreparedExitSubmission({
+  const validate = (signedPrepared: PreparedCallAndProof) =>
+    validatePreparedExitProofEnvelope({
       pool,
       contract,
       proofBaseBlock,
@@ -406,12 +439,12 @@ test("final proof pins the pool class and canonical ProofFacts message", () => {
     });
 
   assert.throws(
-    () => bind(preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", { poolClassHash: "0x123" })),
+    () => validate(preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", { poolClassHash: "0x123" })),
     /different privacy-pool class hash/,
   );
   assert.throws(
     () =>
-      bind(
+      validate(
         preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
           proofFacts: ["0x2"],
         }),
@@ -423,7 +456,7 @@ test("final proof pins the pool class and canonical ProofFacts message", () => {
       () => {
         const malformed = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
         malformed.proof.data = invalidBase64;
-        return bind(malformed);
+        return validate(malformed);
       },
       /canonical standard base64/,
     );
@@ -432,21 +465,21 @@ test("final proof pins the pool class and canonical ProofFacts message", () => {
   for (const [index, value] of [[4, "0x1"], [5, "0xdead"]] as const) {
     const wrongBlock = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
     wrongBlock.proof.proof_facts[index] = value;
-    assert.throws(() => bind(wrongBlock), new RegExp(`proof facts differ at field\\[${index}\\]`));
+    assert.throws(() => validate(wrongBlock), new RegExp(`proof facts differ at field\\[${index}\\]`));
   }
 
   const wrongMessage = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
   wrongMessage.proof.proof_facts[8] = "0x123";
-  assert.throws(() => bind(wrongMessage), /proof facts differ at field\[8\]/);
+  assert.throws(() => validate(wrongMessage), /proof facts differ at field\[8\]/);
 });
 
-test("final signed prepare is bound to the signed note and exact wallet response", () => {
+test("dApp-submitted route binds the signed note to the exact PrepareInvoke response", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
     simulate: true,
   });
   const signedPrepared = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
-  const submission = bindPreparedExitSubmission({
+  const submission = bindDappSubmittedPreparedExit({
     pool,
     contract,
     proofBaseBlock,
@@ -459,28 +492,28 @@ test("final signed prepare is bound to the signed note and exact wallet response
   });
 
   assert.equal(submission.noteId, "0xdeadbeef");
-  assert.equal(assertExactPreparedExitSubmission(submission, signedPrepared), signedPrepared);
+  assert.equal(assertExactDappSubmittedPreparedExit(submission, signedPrepared), signedPrepared);
   assert.throws(
     () =>
-      assertExactPreparedExitSubmission(submission, {
+      assertExactDappSubmittedPreparedExit(submission, {
         call: {
           ...signedPrepared.call,
           calldata: Array.from(signedPrepared.call.calldata as string[]),
         },
         proof: signedPrepared.proof,
       }),
-    /independently rebuilt/,
+    /rebuilt response/,
   );
 });
 
-test("prepared exit binding rejects note drift and non-placeholder submit calldata", () => {
+test("prepared proof-envelope validation rejects note drift and non-placeholder calldata", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
     simulate: true,
   });
   assert.throws(
     () =>
-      bindPreparedExitSubmission({
+      validatePreparedExitProofEnvelope({
         pool,
         contract,
         proofBaseBlock,
@@ -518,7 +551,7 @@ test("final prepare cannot add a TransferTo outside the signed Afterlight Invoke
 
   assert.throws(
     () =>
-      bindPreparedExitSubmission({
+      validatePreparedExitProofEnvelope({
         pool,
         contract,
         proofBaseBlock,
@@ -543,7 +576,7 @@ test("final proof output must be the prepared call's exact ServerAction prefix",
 
   assert.throws(
     () =>
-      bindPreparedExitSubmission({
+      validatePreparedExitProofEnvelope({
         pool,
         contract,
         proofBaseBlock,
@@ -558,15 +591,18 @@ test("final proof output must be the prepared call's exact ServerAction prefix",
   );
 });
 
-test("simulated final proof cannot bind and an accepted response is deeply immutable", () => {
+test("simulated proof cannot validate and a dApp-submitted response is deeply immutable", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelPrepared = preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
     simulate: true,
   });
-  const simulatedFinal = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", { simulate: true });
+  const simulatedFinal = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+    simulate: true,
+    screeningSuffix: ["0x1"],
+  });
   assert.throws(
     () =>
-      bindPreparedExitSubmission({
+      validatePreparedExitProofEnvelope({
         pool,
         contract,
         proofBaseBlock,
@@ -577,11 +613,11 @@ test("simulated final proof cannot bind and an accepted response is deeply immut
         signedArgs: exit,
         signedPrepared: simulatedFinal,
       }),
-    /non-empty submittable STRK20 proof/,
+    /non-empty STRK20 proof envelope/,
   );
 
   const signedPrepared = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
-  const submission = bindPreparedExitSubmission({
+  const submission = bindDappSubmittedPreparedExit({
     pool,
     contract,
     proofBaseBlock,
@@ -604,7 +640,7 @@ test("simulated final proof cannot bind and an accepted response is deeply immut
   assert.throws(() => {
     signedPrepared.call.entrypoint = "compile_actions";
   }, TypeError);
-  assert.equal(assertExactPreparedExitSubmission(submission, signedPrepared), signedPrepared);
+  assert.equal(assertExactDappSubmittedPreparedExit(submission, signedPrepared), signedPrepared);
 });
 
 test("prepared exit parser rejects multiple invokes, wrong pool, target, and entrypoint", () => {

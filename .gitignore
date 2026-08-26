@@ -5,6 +5,8 @@ client/dist/
 client/tools/ready-quote.js
 client/tools/mainnet-operator.js
 client/tools/mainnet-operator-config.local.json
+client/tools/private-exit-preflight.js
+client/tools/private-exit-preflight.meta.json
 .DS_Store
 *.log
 .env

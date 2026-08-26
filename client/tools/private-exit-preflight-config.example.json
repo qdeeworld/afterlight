@@ -1,0 +1,32 @@
+{
+  "evidence": "AFTERLIGHT_PRIVATE_EXIT_PREFLIGHT_E1",
+  "mode": "live-funded",
+  "operation": "CLAIM",
+  "expectedReadyAccount": "0x1",
+  "openNoteRecipient": "0x1",
+  "chainId": "0x534e5f4d41494e",
+  "pool": "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a",
+  "contract": "0x2",
+  "vaultId": "0x3",
+  "token": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
+  "amount": "10000000000000000000",
+  "expectedState": "0x2",
+  "expectedEpoch": "0x1",
+  "expectedNonce": "0x1",
+  "rolePublicKey": "0x4",
+  "authorizationTtlSeconds": "600",
+  "requestedAt": "1787707200",
+  "claimAfter": "1787707500",
+  "rpcProviders": [
+    {
+      "id": "provider-a",
+      "operator": "replace-with-operator-a",
+      "url": "https://replace-with-provider-a.example/rpc"
+    },
+    {
+      "id": "provider-b",
+      "operator": "replace-with-independent-operator-b",
+      "url": "https://replace-with-provider-b.example/rpc"
+    }
+  ]
+}

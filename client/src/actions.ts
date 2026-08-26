@@ -128,12 +128,33 @@ export function resolvePreparedExitNoteId(
   return validatePreparedExit(preparedCall, pool, contract, kind, args).noteId;
 }
 
+/** Resolve a simulate=true sentinel, whose empty proof may omit the screening suffix. */
+export function resolveSimulatedPreparedExitNoteId(
+  prepared: PreparedCallAndProof,
+  pool: FeltInput,
+  contract: FeltInput,
+  kind: PrivateAction.CancelRefund | PrivateAction.Claim,
+  args: ExitArgs,
+): string {
+  assertSimulatedPreparedProof(prepared);
+  return validatePreparedExit(
+    prepared.call,
+    pool,
+    contract,
+    kind,
+    args,
+    "simulated-may-omit-screening-suffix",
+  ).noteId;
+}
+
 function validatePreparedExit(
   preparedCall: PreparedPoolCall,
   pool: FeltInput,
   contract: FeltInput,
   kind: PrivateAction.CancelRefund | PrivateAction.Claim,
   args: ExitArgs,
+  screeningPolicy: "strict-none-suffix" | "simulated-may-omit-screening-suffix" =
+    "strict-none-suffix",
 ): ValidatedPreparedExit {
   if (args.note_id !== OPEN_NOTE_PLACEHOLDER) {
     throw new Error("prepared exit validation requires the open-note placeholder");
@@ -151,7 +172,7 @@ function validatePreparedExit(
     throw new Error("prepared pool call must use apply_actions");
   }
 
-  const parsed = parseServerInvokes(normalized.calldata);
+  const parsed = parseServerInvokes(normalized.calldata, screeningPolicy);
   const exactVariants = [0n, 7n, 10n];
   if (
     parsed.actions.length !== exactVariants.length ||
@@ -222,20 +243,12 @@ function validatePreparedExit(
   };
 }
 
-const exactPreparedExit = Symbol("exact PreparedCallAndProof returned by the signed prepare");
-
-export type PreparedExitSubmission = Readonly<{
+export type PreparedExitProofEnvelope = Readonly<{
   noteId: string;
   prepared: PreparedCallAndProof;
-  [exactPreparedExit]: Readonly<{
-    pool: FeltInput;
-    contract: FeltInput;
-    kind: PrivateAction.CancelRefund | PrivateAction.Claim;
-    args: ExitArgs;
-  }>;
 }>;
 
-export type BindPreparedExitSubmissionArgs = Readonly<{
+export type ValidatePreparedExitProofEnvelopeArgs = Readonly<{
   pool: FeltInput;
   contract: FeltInput;
   proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>;
@@ -248,19 +261,24 @@ export type BindPreparedExitSubmissionArgs = Readonly<{
 }>;
 
 /**
- * Bind the real proof to the note signed after the sentinel prepare. Both
- * action sets retain OPEN_NOTE_PLACEHOLDER; only the prepared calls contain the
- * concrete note id. Ready recompiles CreateOpenNote with fresh encryption
- * randomness, so the two calls are compared semantically while the exact final
- * call/proof object is frozen for submission. The caller must prevent any
- * intervening wallet action that could advance the recipient channel's token
- * note index and therefore change the note id. `proofBaseBlock` must come from
+ * Structurally validate the real prepared proof envelope against the note
+ * signed after the sentinel prepare. Both action sets retain
+ * OPEN_NOTE_PLACEHOLDER; only the prepared calls contain the concrete note id.
+ * Ready recompiles CreateOpenNote with fresh encryption randomness, so the two
+ * calls are compared semantically. The caller must prevent any intervening
+ * wallet action that could advance the recipient channel's token note index and
+ * therefore change the note id. `proofBaseBlock` must come from
  * an independent mainnet RPC lookup of the block identified by the proof facts;
  * copying those two fields out of the proof does not establish canonicality.
+ *
+ * This validator does not submit or execute anything. Normal Ready
+ * `wallet_strk20InvokeTransaction` recompiles a fee-bearing proof from actions
+ * and does not consume this prepared response.
  */
-export function bindPreparedExitSubmission(
-  input: BindPreparedExitSubmissionArgs,
-): PreparedExitSubmission {
+export function validatePreparedExitProofEnvelope(
+  input: ValidatePreparedExitProofEnvelopeArgs,
+): PreparedExitProofEnvelope {
+  assertSimulatedPreparedProof(input.sentinelPrepared);
   if (
     toBigInt(input.sentinelArgs.sig_r, "sentinel signature r") !== 1n ||
     toBigInt(input.sentinelArgs.sig_s, "sentinel signature s") !== 1n
@@ -281,6 +299,7 @@ export function bindPreparedExitSubmission(
     input.contract,
     input.kind,
     input.sentinelArgs,
+    "simulated-may-omit-screening-suffix",
   );
   if (sentinelExit.noteId !== signedNoteId) {
     throw new Error("sentinel prepared note does not match the signed note");
@@ -298,13 +317,45 @@ export function bindPreparedExitSubmission(
   }
   assertEquivalentPreparedExitCalls(sentinelExit, signedExit);
   assertOptionalProofOutputMatchesCall(input.sentinelPrepared, sentinelExit);
-  assertSubmittableProof(input.signedPrepared, signedExit, input.proofBaseBlock);
+  assertCompletePreparedProofEnvelope(input.signedPrepared, signedExit, input.proofBaseBlock);
   freezePreparedResponse(input.signedPrepared);
 
   return Object.freeze({
     noteId: signedNoteId,
     prepared: input.signedPrepared,
-    [exactPreparedExit]: Object.freeze({
+  });
+}
+
+const exactDappSubmittedPreparedExit = Symbol(
+  "exact PrepareInvoke response retained for dApp/paymaster submission",
+);
+
+export type DappSubmittedPreparedExit = PreparedExitProofEnvelope &
+  Readonly<{
+    [exactDappSubmittedPreparedExit]: Readonly<{
+      pool: FeltInput;
+      contract: FeltInput;
+      kind: PrivateAction.CancelRefund | PrivateAction.Claim;
+      args: ExitArgs;
+    }>;
+  }>;
+
+export type BindDappSubmittedPreparedExitArgs = ValidatePreparedExitProofEnvelopeArgs;
+
+/**
+ * Retain the exact prepared response only for the alternative route where a
+ * dApp/paymaster submits `wallet_strk20PrepareInvoke` output itself. This
+ * primitive does not apply to normal Ready `wallet_strk20InvokeTransaction`,
+ * which accepts actions and generates a separate fee-bearing proof.
+ */
+export function bindDappSubmittedPreparedExit(
+  input: BindDappSubmittedPreparedExitArgs,
+): DappSubmittedPreparedExit {
+  const envelope = validatePreparedExitProofEnvelope(input);
+  return Object.freeze({
+    noteId: envelope.noteId,
+    prepared: envelope.prepared,
+    [exactDappSubmittedPreparedExit]: Object.freeze({
       pool: input.pool,
       contract: input.contract,
       kind: input.kind,
@@ -313,15 +364,15 @@ export function bindPreparedExitSubmission(
   });
 }
 
-/** Refuse any response other than the exact call-and-proof object that was bound. */
-export function assertExactPreparedExitSubmission(
-  submission: PreparedExitSubmission,
+/** Refuse any object other than the exact response retained for dApp submission. */
+export function assertExactDappSubmittedPreparedExit(
+  submission: DappSubmittedPreparedExit,
   candidate: PreparedCallAndProof,
 ): PreparedCallAndProof {
   if (candidate !== submission.prepared) {
-    throw new Error("independently rebuilt prepared exit calls cannot be submitted");
+    throw new Error("a rebuilt response cannot replace the exact dApp-submitted prepared exit");
   }
-  const binding = submission[exactPreparedExit];
+  const binding = submission[exactDappSubmittedPreparedExit];
   const noteId = resolvePreparedExitNoteId(
     candidate.call,
     binding.pool,
@@ -552,8 +603,8 @@ function assertEquivalentPreparedExitCalls(
     throw new Error("sentinel and final prepared open-note semantics differ");
   }
 
-  const sentinelRaw = sentinel.normalized.calldata;
-  const signedRaw = signed.normalized.calldata;
+  const sentinelRaw = sentinel.normalized.calldata.slice(0, sentinel.actionsEnd);
+  const signedRaw = signed.normalized.calldata.slice(0, signed.actionsEnd);
   if (sentinelRaw.length !== signedRaw.length) {
     throw new Error("sentinel and final prepared pool calls have different lengths");
   }
@@ -579,7 +630,7 @@ function assertEquivalentPreparedExitCalls(
   }
 }
 
-function assertSubmittableProof(
+function assertCompletePreparedProofEnvelope(
   prepared: PreparedCallAndProof,
   validated: ValidatedPreparedExit,
   proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>,
@@ -592,7 +643,7 @@ function assertSubmittableProof(
     proof.output.length < 2 ||
     !Array.isArray(proof.proof_facts)
   ) {
-    throw new Error("final signed prepare must contain a non-empty submittable STRK20 proof");
+    throw new Error("final signed prepare must contain a non-empty STRK20 proof envelope");
   }
   if (!isCanonicalBase64(proof.data)) {
     throw new Error("final signed prepare proof data must be canonical standard base64");
@@ -623,6 +674,18 @@ function isCanonicalBase64(value: string): boolean {
     return (alphabet.indexOf(value[value.length - 2]!) & 0x03) === 0;
   }
   return true;
+}
+
+function assertSimulatedPreparedProof(prepared: PreparedCallAndProof): void {
+  if (
+    prepared.proof?.data !== "" ||
+    !Array.isArray(prepared.proof.output) ||
+    prepared.proof.output.length !== 0 ||
+    !Array.isArray(prepared.proof.proof_facts) ||
+    prepared.proof.proof_facts.length !== 0
+  ) {
+    throw new Error("sentinel prepare must contain an empty simulate=true proof");
+  }
 }
 
 function assertOptionalProofOutputMatchesCall(
@@ -721,7 +784,7 @@ function assertCanonicalProofFacts(
   }
 }
 
-/** Freeze every mutable leaf whose exact bytes are authorized for submission. */
+/** Freeze every mutable leaf of the structurally validated prepared response. */
 function freezePreparedResponse(prepared: PreparedCallAndProof): void {
   const calldata = (prepared.call as { calldata?: unknown }).calldata;
   if (Array.isArray(calldata)) Object.freeze(calldata);
@@ -742,7 +805,10 @@ function notesStorageAddress(noteId: bigint): bigint {
 }
 
 /** Decode enough of the current pool ServerAction ABI to locate top-level Invoke actions. */
-function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
+function parseServerInvokes(
+  raw: readonly bigint[],
+  screeningPolicy: "strict-none-suffix" | "simulated-may-omit-screening-suffix",
+): ParsedServerInvokes {
   let cursor = 0;
   const take = (label: string): bigint => {
     const value = raw[cursor];
@@ -851,6 +917,9 @@ function parseServerInvokes(raw: readonly bigint[]): ParsedServerInvokes {
   }
 
   const suffix = raw.slice(cursor);
+  if (screeningPolicy === "simulated-may-omit-screening-suffix" && suffix.length === 0) {
+    return { invokes, openNotes, writeOnceActions, actions, actionsEnd: cursor };
+  }
   if (suffix.length !== 1 || suffix[0] !== 1n) {
     throw new Error("prepared no-deposit exit requires an exact Option::None screening suffix");
   }

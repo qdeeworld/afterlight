@@ -8,7 +8,7 @@ Afterlight separates private value movement, application authorization, and tran
 |---|---|---|
 | Ready X and STRK20 | Shielded balances, private invocation, proof preparation, and exact open-note settlement | Owner or successor application secrets outside the user's device |
 | Afterlight Cairo contract | Vault state, signed authorization, liabilities, timing, exact-note binding, and terminal settlement | Ready wallet identity assumptions |
-| Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, and proof-response binding | Relayer account key |
+| Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, and E1 proof-envelope/call binding | Relayer account key |
 | Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, and checkpoint transactions from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
 
 ## Action routing
@@ -32,7 +32,9 @@ Owner/successor device --> signed bounded request --> neutral relayer --> Afterl
 ACTIVE(epoch, last_heartbeat)
   |-- HEARTBEAT --------------------------> ACTIVE (timer reset)
   |-- CANCEL_REFUND ----------------------> CANCELLED
-  `-- REQUEST after inactivity ----------> GRACE(requested_at, claim_after)
+  `-- REQUEST after no authenticated
+      heartbeat for the configured
+      interval ---------------------------> GRACE(requested_at, claim_after)
                                                |-- VETO ------> ACTIVE (new epoch)
                                                `-- CLAIM -----> CLAIMED
 ```
@@ -60,6 +62,15 @@ held token balance >= existing locked liabilities + new fixed reserve
 ```
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
+
+The constructor assigns a public `surplus_admin`. That address may transfer only
+the amount strictly above total locked liabilities; it cannot use the surplus
+path to withdraw a vault reserve, change a vault, or change protocol
+configuration. This is nevertheless an administrative trust boundary: the
+admin chooses the public recipient of unaccounted donations, and an accidental
+donor has no protocol-level right to reclaim them. A compromised admin can take
+available surplus, while the contract's liability check is the control that
+protects accounted user reserves.
 
 ## Vault modes
 

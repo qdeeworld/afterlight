@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Afterlight — private exit preflight</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 16px/1.5 system-ui, sans-serif; margin: 3rem auto; max-width: 64rem; padding: 0 1rem; }
+      h1, h2 { line-height: 1.2; }
+      section { border-top: 1px solid currentColor; margin-top: 2rem; padding-top: 1rem; }
+      button, input { font: inherit; min-height: 44px; }
+      button { margin: .5rem .5rem .5rem 0; padding: .65rem 1rem; }
+      button:disabled { cursor: not-allowed; opacity: .55; }
+      input { box-sizing: border-box; display: block; margin: .35rem 0 1rem; padding: .55rem; width: 100%; }
+      label { display: block; font-weight: 650; }
+      .warning { border-left: .25rem solid #b26a00; padding: .25rem 1rem; }
+      .error { color: #b42318; min-height: 1.5rem; }
+      pre { background: #111; color: #eee; overflow: auto; padding: 1rem; white-space: pre-wrap; }
+      :focus-visible { outline: 3px solid #6aa9ff; outline-offset: 2px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Afterlight private exit preflight</h1>
+      <p id="status" role="status" aria-live="polite">Detecting Ready X…</p>
+      <p class="warning">
+        This local tool prepares and validates an E1 artifact only. It cannot sign a wallet
+        transaction, execute a call, broadcast a transaction, or prove a mainnet result.
+        Full STRK20 proofs stay in memory and are never shown or saved.
+      </p>
+
+      <section aria-labelledby="setup-heading">
+        <h2 id="setup-heading">1. Lock configuration and wallet boundary</h2>
+        <p id="config-help">
+          Select the private JSON from outside this server's document root. The browser reads it
+          through the file picker; it is never fetched by URL or uploaded by this tool.
+        </p>
+        <label for="config-file">Local E1 configuration</label>
+        <input id="config-file" type="file" accept="application/json,.json" aria-describedby="config-help" />
+        <button id="load-config">Read selected configuration</button>
+        <button id="retry">Retry Ready X detection</button>
+        <button id="silent" disabled>Use existing Ready authorization</button>
+        <button id="connect" disabled>Connect exact Ready recipient</button>
+      </section>
+
+      <section aria-labelledby="sentinel-heading">
+        <h2 id="sentinel-heading">2. Resolve the destination and authorization hash</h2>
+        <p>A simulate-only prepare resolves one open note. Any wallet account or network change invalidates it.</p>
+        <button id="sentinel" disabled>Prepare simulate-only sentinel</button>
+      </section>
+
+      <section aria-labelledby="signature-heading">
+        <h2 id="signature-heading">3. Verify the signature and bind the proof envelope</h2>
+        <p id="signature-help">
+          Sign the displayed authorization hash outside this tool with the required per-vault
+          application key, then paste only the two public signature scalars. This validates the
+          prepared call, proof envelope, and accepted base block; only an onchain receipt can prove
+          the opaque proof and helper execution succeeded.
+        </p>
+        <label for="signature-r">Application signature r</label>
+        <input id="signature-r" inputmode="text" autocomplete="off" spellcheck="false" aria-describedby="signature-help signature-error" disabled />
+        <label for="signature-s">Application signature s</label>
+        <input id="signature-s" inputmode="text" autocomplete="off" spellcheck="false" aria-describedby="signature-help signature-error" disabled />
+        <p id="signature-error" class="error" role="alert" aria-live="assertive"></p>
+        <button id="complete" disabled>Prepare and validate envelope without submitting</button>
+      </section>
+
+      <section aria-labelledby="result-heading">
+        <h2 id="result-heading">Redacted E1 result</h2>
+        <pre id="output" role="status" aria-live="polite">No proof prepared.</pre>
+      </section>
+    </main>
+    <script type="module" src="./private-exit-preflight.js?v=1"></script>
+  </body>
+</html>
