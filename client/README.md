@@ -65,7 +65,7 @@ deployment manifest, build the selected Scarb profile, and run:
 
 ```sh
 npm run operator:build
-python3 -m http.server 43118 --bind 127.0.0.1
+python3 -m http.server 43118 --bind 127.0.0.1 --directory ..
 ```
 
 Open `http://127.0.0.1:43118/client/tools/mainnet-operator.html` in the Chrome

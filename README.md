@@ -73,7 +73,7 @@ npm --prefix client run verify:locked-artifacts
 npm --prefix client test
 
 npm --prefix relayer ci
-npm --prefix relayer test
+npm --prefix relayer run check
 ```
 
 The public CI workflow also rebuilds the locked `spike-inline-56` deployment
