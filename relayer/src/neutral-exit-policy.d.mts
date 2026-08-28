@@ -45,6 +45,6 @@ export function validateAllowanceForAction(action: string, allowance: bigint): b
 export function validateBalanceForExit(balance: bigint, resourceCap: bigint, healthFloor?: bigint): unknown;
 export function assertProofFreshness(baseBlock: bigint, liveBlock: bigint, validityBlocks: bigint): bigint;
 export function assertSignedExitTransaction(signed: unknown, expected: unknown): boolean;
-export function assertOuterSignatureMatchesHash(signed: unknown): string;
+export function assertOuterSignatureMatchesHash(signed: unknown, publicKey?: string): string;
 export function normalizeHex(value: string, label?: string): string;
 export function safePublicError(error: unknown): string;
