@@ -1,11 +1,12 @@
-# Afterlight client and local operator primitives (E1)
+# Afterlight client and local operator primitives
 
 This package contains deterministic application-key, authorization, relay-schema,
 STRK20 action, structural prepared-exit envelope validation, read-only quote, and explicit local
 operator primitives. It has no public product UI or production storage. Its
 quote, preflight, and operator tools can read Mainnet; only the explicitly labelled
 operator buttons can request a wallet declaration or deployment, and each still
-requires a visible Ready X confirmation. No mainnet deployment is claimed.
+requires a visible Ready X confirmation. The deployed Mainnet release and its
+four qualifying receipts are recorded in [`../docs/MAINNET.md`](../docs/MAINNET.md).
 
 ```sh
 npm ci
@@ -17,10 +18,10 @@ The tested toolchain is Node.js `22.13.1` with the committed npm lockfile.
 The live exit canary is intentionally strict: `CANCEL_REFUND` and `CLAIM` give
 Ready exactly an `OPEN` transfer followed by the helper invoke. They never add a
 public self-withdraw. Ready adds its own private paymaster-fee withdrawal during
-submission. A successful mainnet Wrenchless claim demonstrates this app-action
-shape ([source](https://github.com/Timidan/wrenchless/blob/b61e989ad9f24d9ba4803bf28b796564579bd220/packages/canary-core/src/refill-claim.ts),
-[mainnet receipt](https://voyager.online/tx/0x02e969f712d5ff8f3091bd42b06978c285c8ad221081da5f575afbc72f87888e)),
-but Afterlight must still reproduce it with its own helper before promotion.
+submission. Afterlight reproduced this exact-note route through its own helper
+for both `CANCEL_REFUND` and `CLAIM` on Mainnet. The contract states, liability,
+pool allowance, exact destination notes, and four qualifying receipts reconcile;
+Ready's wallet-visible post-exit balance remains the final E2 visibility check.
 
 Application secrets are held by `LocalStarkKey`; ordinary serialization exposes only the public key. Raw secret export requires the explicitly named backup method and confirmation constant. Relayer requests contain only signed public calldata for `HEARTBEAT`, `REQUEST`, or `VETO`.
 
@@ -81,7 +82,7 @@ separate, visible Ready wallet confirmation.
 
 ## Local private-exit preflight
 
-`tools/private-exit-preflight.html` is an E1-only, no-submit check for
+`tools/private-exit-preflight.html` is a no-submit structural check for
 `CANCEL_REFUND` and `CLAIM`. It reads the currently selected Ready account
 directly and silently before and after each Prepare call, enforces the
 operation's plausible state/epoch/nonce and 900-second authorization window,
