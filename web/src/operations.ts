@@ -72,6 +72,8 @@ function base(vaultId: string, signerKey: string, state: string, epoch: string, 
 
 async function checkpoint(): Promise<string> {
   const startedBlock = await provider.getBlockNumber();
+  const startedAt = Math.floor(Date.now() / 1_000);
+  let returnedHash: string | undefined;
   try {
     const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
       method: "POST",
@@ -82,7 +84,7 @@ async function checkpoint(): Promise<string> {
     });
     const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
     if (response.ok && body.status === "relayed" && body.result?.transactionHash && ["accepted", "duplicate"].includes(String(body.result.status))) {
-      return num.toHex(BigInt(body.result.transactionHash));
+      returnedHash = num.toHex(BigInt(body.result.transactionHash));
     }
   } catch {
     // A Worker response may be lost after its single broadcast. Reconcile the
@@ -96,7 +98,14 @@ async function checkpoint(): Promise<string> {
       keys: [[CHECKPOINT_SELECTOR]],
       chunk_size: 10,
     });
-    const event = result.events.at(-1);
+    const event = result.events
+      .filter((candidate) => {
+        if (!candidate.transaction_hash || candidate.data.length < 3) return false;
+        const hash = num.toHex(BigInt(candidate.transaction_hash));
+        const syncedAt = Number(BigInt(candidate.data[2] ?? "0"));
+        return (!returnedHash || hash === returnedHash) && syncedAt >= startedAt - 30;
+      })
+      .at(-1);
     if (event?.transaction_hash) {
       const transactionHash = num.toHex(BigInt(event.transaction_hash));
       await waitForSuccess(transactionHash);

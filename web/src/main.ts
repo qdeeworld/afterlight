@@ -18,6 +18,7 @@ let vault: VaultSnapshot | undefined;
 let notice = "Loading the live Starknet Mainnet product…";
 let busy = false;
 let transactionHash = "";
+let costAcknowledged = false;
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("Afterlight app root is missing.");
@@ -82,7 +83,7 @@ function ownerView(): string {
       <fieldset><legend>Recovery Drill terms</legend><div class="choice selected"><span><strong>1 STRK reserve</strong><small>Fixed by the deployed contract</small></span></div><div class="choice selected"><span><strong>5 min + 5 min</strong><small>Inactivity, then grace</small></span></div></fieldset>
       <label class="full-field"><span>Designated successor public key</span><input name="successor-key" autocomplete="off" spellcheck="false" placeholder="0x…" value="${escapeHtml(successorPublicKey)}" /><small>The successor must generate this independently. Do not accept their secret.</small></label>
       <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this drill uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction.</p></aside>
-      <label class="ack"><input name="cost-ack" type="checkbox" /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
+      <label class="ack"><input name="cost-ack" type="checkbox" ${costAcknowledged ? "checked" : ""} /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
       <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>Create and privately fund reserve</button>
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
     </form>
@@ -207,7 +208,14 @@ function bindEvents(): void {
     if (role === "successor") successorPublicKey = applicationKey.publicKey;
     notice = `${role === "owner" ? "Owner" : "Successor"} key restored locally.`;
   }));
-  document.querySelector<HTMLInputElement>("[name=successor-key]")?.addEventListener("input", (event) => { successorPublicKey = (event.currentTarget as HTMLInputElement).value.trim(); });
+  document.querySelector<HTMLInputElement>("[name=successor-key]")?.addEventListener("input", (event) => {
+    successorPublicKey = (event.currentTarget as HTMLInputElement).value.trim();
+    const submit = document.querySelector<HTMLButtonElement>("#reserve-form button[type=submit]");
+    if (submit) submit.disabled = !(walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey));
+  });
+  document.querySelector<HTMLInputElement>("[name=cost-ack]")?.addEventListener("change", (event) => {
+    costAcknowledged = (event.currentTarget as HTMLInputElement).checked;
+  });
   document.querySelector<HTMLTextAreaElement>("[name=invitation]")?.addEventListener("input", (event) => {
     invitationText = (event.currentTarget as HTMLTextAreaElement).value;
     localStorage.setItem("afterlight:invitation:v1", invitationText);
@@ -218,7 +226,7 @@ function bindEvents(): void {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
     void run(async () => {
-      if (!form.has("cost-ack")) throw new Error("Confirm the exact 7 STRK private-wallet consequence first.");
+      if (!form.has("cost-ack") || !costAcknowledged) throw new Error("Confirm the exact 7 STRK private-wallet consequence first.");
       if (!ready || !applicationKey) throw new Error("Connect Ready X and generate the owner key first.");
       if (privateBalance === undefined || privateBalance < 7n * 10n ** 18n) throw new Error("At least 7 private STRK is required.");
       notice = "Requesting a fresh neutral funding checkpoint…"; render();
@@ -231,6 +239,7 @@ function bindEvents(): void {
       download(`afterlight-invitation-${result.invitation.vaultId.slice(2, 10)}.json`, invitationText);
       vault = await readVault(result.invitation.vaultId);
       privateBalance = await ready.balance(STRK);
+      costAcknowledged = false;
       notice = "Recovery reserve is ACTIVE. Invitation downloaded; share it with the designated successor.";
     });
   });
