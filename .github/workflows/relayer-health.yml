@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   health:
-    name: Verify disabled submission and privacy boundary
+    name: Verify production submission and privacy boundary
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -40,11 +40,12 @@ jobs:
             .status == "ok" and
             .service == "afterlight-neutral-relayer" and
             .schema == "afterlight-relay/1" and
-            .submission == "disabled" and
+            .submission == "enabled" and
             .executor.configurationReady == true and
             .executor.signerAdapterAvailable == true and
             .executor.executable == true and
-            .balance.status == "disabled" and
+            .balance.status == "ok" and
+            .balance.alert == false and
             .privacy.payloadLogging == false and
             .privacy.appKeysHeld == false and
             .privacy.walletAddressesRequired == false
