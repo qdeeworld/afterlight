@@ -29,6 +29,8 @@ import type { ReadySession } from "./wallet.ts";
 import { waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
 
+const CHECKPOINT_SELECTOR = "0x680f3f85ab85ad72c372d5d99610c8c5ffd7ebf3a1f26fbd21fa999346525d";
+
 export function generateKey(): LocalStarkKey {
   return LocalStarkKey.generate();
 }
@@ -69,18 +71,40 @@ function base(vaultId: string, signerKey: string, state: string, epoch: string, 
 }
 
 async function checkpoint(): Promise<string> {
-  const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
-    method: "POST",
-    headers: { "x-afterlight-intent": "funding-checkpoint" },
-    cache: "no-store",
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-  });
-  const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
-  if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash || !["accepted", "duplicate"].includes(String(body.result.status))) {
-    throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
+  const startedBlock = await provider.getBlockNumber();
+  try {
+    const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
+      method: "POST",
+      headers: { "x-afterlight-intent": "funding-checkpoint" },
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+    const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
+    if (response.ok && body.status === "relayed" && body.result?.transactionHash && ["accepted", "duplicate"].includes(String(body.result.status))) {
+      return num.toHex(BigInt(body.result.transactionHash));
+    }
+  } catch {
+    // A Worker response may be lost after its single broadcast. Reconcile the
+    // public, payload-free checkpoint event before declaring the attempt dead.
   }
-  return num.toHex(BigInt(body.result.transactionHash));
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const result = await provider.getEvents({
+      from_block: { block_number: startedBlock },
+      to_block: "latest",
+      address: CONTRACT,
+      keys: [[CHECKPOINT_SELECTOR]],
+      chunk_size: 10,
+    });
+    const event = result.events.at(-1);
+    if (event?.transaction_hash) {
+      const transactionHash = num.toHex(BigInt(event.transaction_hash));
+      await waitForSuccess(transactionHash);
+      return transactionHash;
+    }
+    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
 }
 
 export async function fundRecoveryDrill(input: {
