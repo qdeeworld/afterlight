@@ -233,6 +233,17 @@ function exitStage(stage: string): ExitExecutorError {
 function classifyEstimateFailure(error: unknown): string {
   // Emit only a fixed category. Never log the upstream message because RPC
   // execution errors can echo calldata, proof material, note IDs or signatures.
+  const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : undefined;
+  const base = typeof record?.baseError === "object" && record.baseError !== null
+    ? record.baseError as Record<string, unknown>
+    : undefined;
+  const code = typeof record?.code === "number" ? record.code : typeof base?.code === "number" ? base.code : undefined;
+  if (code === 41) return "rpc_execution";
+  if (code === 52) return "rpc_transaction_nonce";
+  if (code === 53) return "rpc_validate_resources";
+  if (code === 54) return "rpc_account_balance";
+  if (code === 55) return "rpc_validation";
+  if (code !== undefined) return "rpc_other";
   const message = error instanceof Error ? error.message.toLowerCase() : "";
   if (message.includes("insufficient") && (message.includes("balance") || message.includes("fee"))) return "insufficient_balance";
   if (message.includes("nonce")) return "nonce";
