@@ -8,7 +8,7 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 **Evidence level: E1 pending one balance-visibility check.** The complete two-branch recovery mechanism has run on Starknet Mainnet. Four successful transactions touch both the canonical STRK20 pool and Afterlight, including exact-note private cancellation and successor recovery. The contract, client, and neutral-relayer controls also have deterministic local coverage. Promotion to E2 remains intentionally blocked until Ready X exposes the successor's post-claim shielded balance after finality.
 
-**Release status: deployed mechanism, public product pending.** Afterlight is deployed at `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Vault A completed `FUND -> CANCEL_REFUND`; Vault B completed early refusal, heartbeat, request, veto, second request, and `CLAIM`. The bounded neutral relayer executed the control path without using either Ready role as the outer sender and is submission-disabled after the spike. A public user-ready interface and E3 completion do not exist yet.
+**Release status: deployed mechanism, public product pending.** Afterlight is [deployed on Mainnet](https://voyager.online/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). Vault A completed `FUND -> CANCEL_REFUND`; Vault B completed early refusal, heartbeat, request, veto, second request, and `CLAIM`. The bounded neutral relayer executed the control path without using either Ready role as the outer sender and is submission-disabled after the spike. A public user-ready interface and E3 completion do not exist yet.
 
 ## Recovery flow
 

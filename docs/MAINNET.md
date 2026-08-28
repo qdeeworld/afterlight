@@ -29,7 +29,7 @@ artifact-identity proof for the live pool class.
 | Compiler profile | `spike-inline-56` | Reproduces locally and in CI |
 | Sierra class hash | `0x05da9866f62cc6dd1e380e8d9206e78a752b460abdb802070e0be1208ec7b1a6` | Declared on Mainnet |
 | CASM/compiled class hash | `0x055ba10e36aac8e21b3437f1413f009f6b17d3633c307941a4412ce73566251` | Declaration lock |
-| Afterlight contract | `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25` | Deployed on Mainnet |
+| Afterlight contract | [`0x06e8…61c25`](https://voyager.online/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25) | Deployed on Mainnet |
 | Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; spike controls complete |
 
 Run `scarb --profile spike-inline-56 build` and
@@ -45,14 +45,15 @@ contract. Plain Shield transactions and failed attempts do not fill these slots.
 
 | Required branch | Mainnet transaction hash | Validator result |
 |---|---|---|
-| `FUND` Vault A | `0x030ea14ac22e5806e382658971b686692af280bf2f02173a430f572921121722` | PASS |
-| `CANCEL_REFUND` Vault A | `0x69e2345ae8816986a709de84f0dcb571b5d092400d6c53bf90197480102c0fb` | PASS |
-| `FUND` Vault B | `0x036e003396fe360ae7fe4766646f493c0eb579d82509652559d40e460770682a` | PASS |
-| `CLAIM` Vault B | `0x11c990aea864e755630d41fd1292620c313b3f64407fc0b3a902544c67c8098` | PASS |
+| `FUND` Vault A | [`0x030ea1…21722`](https://voyager.online/tx/0x030ea14ac22e5806e382658971b686692af280bf2f02173a430f572921121722) | PASS |
+| `CANCEL_REFUND` Vault A | [`0x69e234…c0fb`](https://voyager.online/tx/0x69e2345ae8816986a709de84f0dcb571b5d092400d6c53bf90197480102c0fb) | PASS |
+| `FUND` Vault B | [`0x036e00…0682a`](https://voyager.online/tx/0x036e003396fe360ae7fe4766646f493c0eb579d82509652559d40e460770682a) | PASS |
+| `CLAIM` Vault B | [`0x11c990…c8098`](https://voyager.online/tx/0x11c990aea864e755630d41fd1292620c313b3f64407fc0b3a902544c67c8098) | PASS |
 
 The official hub validator's exact success, pool-touch, and declared-contract
 ownership checks pass for all four. Vault A is `CANCELLED`, Vault B is
 `CLAIMED`, total locked liability is zero, and the neutral pool allowance is
 zero. Exact-note settlement is proven onchain. The remaining promotion gap is
-the wallet's post-finality display of the successor's expected `1 STRK`
-shielded balance. A public demo URL and final video remain pending.
+the wallet's post-finality reconciliation from `6 STRK` to `1 STRK`: the exact
+`+1 STRK` recovery output minus the exact `6 STRK` private action fee. A public
+demo URL and final video remain pending.
