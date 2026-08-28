@@ -39,7 +39,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 6. Install secrets, verify configuration readiness, and obtain fresh no-submit quotes.
 7. Enable submission only within the bounded production sponsorship policy.
 8. Run one checkpoint and one signed control canary; reconcile their hashes, exact calldata, sender, actual FRI fee, and Durable Object totals.
-9. Confirm direct `workers.dev` access is disabled and the public product route remains healthy.
+9. Confirm the stable Worker URL and public product route remain healthy, and that strict origin checks reject every unlisted site. Disable direct `workers.dev` access only after a verified same-origin proxy replaces it.
 
 ## Nonce and receipt discipline
 
@@ -49,6 +49,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 - A request with the same semantic operation but different signature, expiry, or exact fingerprint cannot reconcile the submitted transaction.
 - Never release a submitted reservation based only on an RPC timeout. Confirm the transaction or account nonce before any manual recovery.
 - A receipt fee above its reservation records the full spend and freezes all new sponsorship.
+- Never rotate `DEPLOYMENT_ID` to bypass a `SUBMITTED` or otherwise ambiguous reservation. A new ledger namespace is permitted only after independent transaction, nonce, contract-state, allowance and balance checks prove that no broadcast occurred. Record the abandoned namespace, rebaseline the actual funded balance, use a unique deployment ID, and retain a hard balance floor and one-attempt exit cap in the replacement release.
 
 ## Monitoring and alerts
 
@@ -67,12 +68,13 @@ Monitor through at least 2026-09-04:
 - RPC error rate and checkpoint/control success rate without payload logging;
 - Worker and Pages deployment versions matching the recorded release commit.
 
-The bounded lifecycle uses two funding checkpoints plus `HEARTBEAT`, two
-`REQUEST` calls, and `VETO`. With the current 0.2 STRK per-call ceiling, the
-daily sponsorship budget is 1.2 STRK so all six can fit without silently
-contradicting the per-call policy. Replace caps only from fresh quotes; never
-enable a daily budget smaller than the quoted lifecycle or larger than the
-funded operational bound.
+The completed bounded control lifecycle used two funding checkpoints plus
+`HEARTBEAT`, two `REQUEST` calls, and `VETO`. The current control-plane ceiling
+is `0.4 STRK` per call and `1.6 STRK` per UTC day. The exact-note exit has a
+separate `7.5 STRK` full resource-bounds ceiling, a separate exact `6 STRK`
+pool allowance, and a `1 STRK` post-spend balance floor. Replace any cap only
+from fresh quotes; never enable exposure larger than the funded operational
+bound.
 
 Do not log request bodies, signatures, IP addresses, wallet addresses,
 application keys, vault IDs, transaction fingerprints, RPC authorization, or
