@@ -1,4 +1,4 @@
-name: Inert relayer staging health
+name: Post-spike relayer health
 
 on:
   schedule:
@@ -9,12 +9,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: inert-relayer-health
+  group: afterlight-relayer-health
   cancel-in-progress: true
 
 jobs:
   health:
-    name: Verify fail-closed staging
+    name: Verify disabled submission and privacy boundary
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -41,8 +41,9 @@ jobs:
             .service == "afterlight-neutral-relayer" and
             .schema == "afterlight-relay/1" and
             .submission == "disabled" and
-            .executor.configurationReady == false and
-            .executor.executable == false and
+            .executor.configurationReady == true and
+            .executor.signerAdapterAvailable == true and
+            .executor.executable == true and
             .balance.status == "disabled" and
             .privacy.payloadLogging == false and
             .privacy.appKeysHeld == false and
