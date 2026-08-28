@@ -203,8 +203,18 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     await budget.finalize(semanticKey, validated.bindingSha256, transactionHash, fee, "succeeded", Date.now());
     return { status: "accepted", transactionHash, actualFeeFri: fee };
   } catch (error) {
-    if (signed === undefined) await budget.release(semanticKey, validated.bindingSha256, Date.now());
+    if (signed === undefined) {
+      try {
+        await budget.release(semanticKey, validated.bindingSha256, Date.now());
+      } catch {
+        // Preserve the original pre-broadcast failure. Cleanup diagnostics are
+        // payload-free and must never turn a safe failed attempt into a generic
+        // response that hides whether signing began.
+        console.error(JSON.stringify({ event: "exit_reservation_release_failed", stage: "before_signing" }));
+      }
+    }
     if (error instanceof ExitExecutorError) throw error;
+    console.error(JSON.stringify({ event: "exit_submission_failed", stage: signed === undefined ? "before_signing" : "after_signing" }));
     throw signed === undefined ? new ExitExecutorError("exit_unavailable") : new ExitExecutorError("exit_uncertain");
   }
 }
