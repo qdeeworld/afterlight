@@ -73,7 +73,9 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     if (validated.action !== "CLAIM") throw new Error("only_claim_is_public");
   } catch { throw new ExitExecutorError("invalid_exit"); }
 
-  const semanticKey = `exit:${validated.bindingSha256}`;
+  // The binding is already a domain-separated SHA-256 over the complete exit
+  // package. Budget keys deliberately accept only canonical 64-hex digests.
+  const semanticKey = validated.bindingSha256;
   const prior = await budget.lookup(semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     return { status: "duplicate", transactionHash: prior.transactionHash };
