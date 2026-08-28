@@ -141,5 +141,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - run: npm ci
+      - name: Install shared client type dependencies
+        run: npm --prefix ../client ci
       - run: npm run build
       - run: npm audit --audit-level=high
