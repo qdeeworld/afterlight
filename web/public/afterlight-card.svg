@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title description">
+  <title id="title">Afterlight — private control over time</title>
+  <desc id="description">Private Starknet recovery reserves with heartbeat, grace, veto, and exact-note recovery.</desc>
+  <rect width="1200" height="675" fill="#fffdf8"/>
+  <rect x="44" y="44" width="1112" height="587" rx="30" fill="#f4f1e9" stroke="#d8d3c8" stroke-width="2"/>
+  <g transform="translate(92 88)">
+    <rect width="54" height="54" rx="13" fill="#191915"/>
+    <circle cx="27" cy="27" r="15" fill="#d86f31"/>
+    <circle cx="34" cy="21" r="14" fill="#191915"/>
+    <circle cx="21" cy="37" r="2.5" fill="#fffdf8"/>
+    <text x="72" y="39" fill="#191915" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="750">Afterlight</text>
+  </g>
+  <text x="92" y="245" fill="#8e3514" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="750" letter-spacing="2.4">PRIVATE STARKNET RECOVERY</text>
+  <text x="92" y="323" fill="#191915" font-family="Georgia, 'Times New Roman', serif" font-size="68" font-weight="500" letter-spacing="-2">Private control</text>
+  <text x="92" y="391" fill="#191915" font-family="Georgia, 'Times New Roman', serif" font-size="68" font-weight="500" letter-spacing="-2">over time.</text>
+  <text x="92" y="448" fill="#68685f" font-family="Inter, Arial, sans-serif" font-size="24">Fund privately. Heartbeat while active. Veto during grace.</text>
+  <g transform="translate(92 510)" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">
+    <rect width="160" height="52" rx="26" fill="#191915"/><text x="80" y="33" fill="#fffdf8" text-anchor="middle">PROTECTED</text>
+    <path d="M176 26h42" stroke="#8e3514" stroke-width="3"/><path d="m211 18 9 8-9 8" fill="none" stroke="#8e3514" stroke-width="3"/>
+    <rect x="234" width="148" height="52" rx="26" fill="#ebe6db" stroke="#d8d3c8"/><text x="308" y="33" fill="#191915" text-anchor="middle">GRACE</text>
+    <path d="M398 26h42" stroke="#8e3514" stroke-width="3"/><path d="m433 18 9 8-9 8" fill="none" stroke="#8e3514" stroke-width="3"/>
+    <rect x="456" width="250" height="52" rx="26" fill="#d86f31"/><text x="581" y="33" fill="#191915" text-anchor="middle">PRIVATE RECOVERY</text>
+  </g>
+  <g transform="translate(925 188)">
+    <circle cx="82" cy="82" r="82" fill="#191915"/>
+    <circle cx="82" cy="82" r="57" fill="#d86f31"/>
+    <circle cx="109" cy="61" r="55" fill="#191915"/>
+    <circle cx="60" cy="122" r="9" fill="#fffdf8"/>
+  </g>
+  <text x="1007" y="404" fill="#68685f" font-family="Inter, Arial, sans-serif" font-size="18" text-anchor="middle">Powered by STRK20</text>
+</svg>
