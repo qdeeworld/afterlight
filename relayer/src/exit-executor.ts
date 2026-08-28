@@ -163,11 +163,16 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   }
 
   let signed;
+  let broadcastStarted = false;
+  let submissionStage = "fresh_nonce";
   try {
     const freshNonce = BigInt(await account.getNonce("pre_confirmed"));
+    submissionStage = "fresh_block";
     const freshBlock = await provider.getBlockWithTxHashes("latest");
     if (!("block_number" in freshBlock) || freshNonce !== snapshot.nonce || BigInt(freshBlock.block_number) - blockNumber > 300n) throw new Error("snapshot_changed");
+    submissionStage = "fresh_snapshot";
     await readSnapshot(provider, validated, BigInt(freshBlock.block_number), BigInt(freshBlock.timestamp));
+    submissionStage = "sign";
     signed = await account.getSignedTransaction(call, {
       nonce: snapshot.nonce,
       resourceBounds: bounds,
@@ -179,6 +184,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       proof: validated.proof.data,
       proofFacts,
     });
+    submissionStage = "signed_assertions";
     assertSignedExitTransaction(signed, {
       nonce: snapshot.nonce,
       executeCalldata: transaction.getExecuteCalldata([call], "1"),
@@ -187,11 +193,16 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       resourceBounds: bounds,
       networkCapFri: policy.networkCapFri,
     });
+    submissionStage = "outer_hash";
     const expectedHash = assertOuterSignatureMatchesHash(signed);
+    submissionStage = "broadcast";
+    broadcastStarted = true;
     const response = await provider.invokeSignedTx(signed);
     const transactionHash = normalizeHex(response.transaction_hash);
     if (transactionHash !== expectedHash) throw new ExitExecutorError("exit_uncertain");
+    submissionStage = "mark_submitted";
     await budget.markSubmitted(semanticKey, validated.bindingSha256, transactionHash, Date.now());
+    submissionStage = "receipt";
     const receipt = await provider.waitForTransaction(transactionHash, { retries: 45, retryInterval: 2_000 });
     if (receipt.isError()) throw new ExitExecutorError("exit_uncertain");
     const raw = receipt.value as unknown as Record<string, unknown>;
@@ -200,22 +211,23 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       await budget.finalize(semanticKey, validated.bindingSha256, transactionHash, fee, "reverted", Date.now());
       throw new ExitExecutorError("exit_reverted");
     }
+    submissionStage = "finalize";
     await budget.finalize(semanticKey, validated.bindingSha256, transactionHash, fee, "succeeded", Date.now());
     return { status: "accepted", transactionHash, actualFeeFri: fee };
   } catch (error) {
-    if (signed === undefined) {
+    if (!broadcastStarted) {
       try {
         await budget.release(semanticKey, validated.bindingSha256, Date.now());
       } catch {
         // Preserve the original pre-broadcast failure. Cleanup diagnostics are
         // payload-free and must never turn a safe failed attempt into a generic
         // response that hides whether signing began.
-        console.error(JSON.stringify({ event: "exit_reservation_release_failed", stage: "before_signing" }));
+        console.error(JSON.stringify({ event: "exit_reservation_release_failed", stage: submissionStage }));
       }
     }
     if (error instanceof ExitExecutorError) throw error;
-    console.error(JSON.stringify({ event: "exit_submission_failed", stage: signed === undefined ? "before_signing" : "after_signing" }));
-    throw signed === undefined ? new ExitExecutorError("exit_unavailable") : new ExitExecutorError("exit_uncertain");
+    console.error(JSON.stringify({ event: "exit_submission_failed", stage: submissionStage }));
+    throw broadcastStarted ? new ExitExecutorError("exit_uncertain") : new ExitExecutorError("exit_unavailable");
   }
 }
 
