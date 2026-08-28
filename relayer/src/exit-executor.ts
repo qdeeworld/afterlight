@@ -118,7 +118,9 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       nonceDataAvailabilityMode: "L1",
       feeDataAvailabilityMode: "L1",
     });
-  } catch { throw exitStage("estimate"); }
+  } catch (error) {
+    throw exitStage(`estimate_${classifyEstimateFailure(error)}`);
+  }
   let bounds;
   let networkCap;
   try {
@@ -226,4 +228,16 @@ function exitStage(stage: string): ExitExecutorError {
   // wallet addresses, IPs, RPC payloads, or raw exception messages.
   console.error(JSON.stringify({ event: "exit_preflight_rejected", stage }));
   return new ExitExecutorError("exit_unavailable");
+}
+
+function classifyEstimateFailure(error: unknown): string {
+  // Emit only a fixed category. Never log the upstream message because RPC
+  // execution errors can echo calldata, proof material, note IDs or signatures.
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  if (message.includes("insufficient") && (message.includes("balance") || message.includes("fee"))) return "insufficient_balance";
+  if (message.includes("nonce")) return "nonce";
+  if (message.includes("proof") || message.includes("validate")) return "proof_or_validation";
+  if (message.includes("revert") || message.includes("execution")) return "execution";
+  if (message.includes("timeout") || message.includes("network") || message.includes("fetch")) return "transport";
+  return "unknown";
 }
