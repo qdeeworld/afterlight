@@ -2,11 +2,12 @@
 
 ## Evidence and release status
 
-This is the Ready X flow exercised by the deployed Afterlight Mainnet mechanism.
-It documents prerequisites and the user boundary; it is not yet a public-product
-runbook or a standing instruction to fund or sign. The contract and a complete
-founder-operated lifecycle exist, while the public UI and unrelated-user E3/E4
-completion remain pending.
+This is the Ready X flow implemented by the public Afterlight interface and
+exercised by the deployed Mainnet mechanism. The contract and a complete
+founder-operated lifecycle exist. The public interface is live, while a fresh
+end-to-end E3 completion through that interface and unrelated-user E4
+completion remain pending. Nothing in this document is a standing instruction
+to fund or sign; users must review the live wallet request and current fees.
 
 ## Accounts and STRK20 prerequisites
 
@@ -49,7 +50,7 @@ method, store it offline, test restoration before funding, and never upload it
 to the relayer. A production UI must make backup/import and this plaintext
 library boundary explicit.
 
-## Planned owner journey
+## Owner journey
 
 1. Connect the owner Ready X account and verify Starknet Mainnet, deployment,
    STRK20 registration, and balances.
