@@ -7,7 +7,7 @@ import {
   encodeRelayRequest,
   type RelayRequest,
 } from "../src/schema.js";
-import { rateLimitRelay, RelayHttpError } from "../src/core.js";
+import { isAllowedOrigin, rateLimitRelay, RelayHttpError } from "../src/core.js";
 
 const origin = "https://afterlight.invalid";
 const contract = "0x1234";
@@ -15,6 +15,14 @@ const token = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938
 const amount = 10_000_000_000_000_000_000n;
 
 describe("Afterlight Phase A relay Worker", () => {
+  it("matches only exact origins from the configured transition allowlist", () => {
+    const configured = "https://afterlight-app.pages.dev,https://afterlight.dolepee.com";
+    expect(isAllowedOrigin("https://afterlight-app.pages.dev", configured)).toBe(true);
+    expect(isAllowedOrigin("https://afterlight.dolepee.com", configured)).toBe(true);
+    expect(isAllowedOrigin("https://afterlight.dolepee.com.evil.invalid", configured)).toBe(false);
+    expect(isAllowedOrigin(null, configured)).toBe(false);
+  });
+
   it("reports structured health without secret, wallet, IP or account material", async () => {
     const response = await exports.default.fetch("https://relay.invalid/health");
     expect(response.status).toBe(200);

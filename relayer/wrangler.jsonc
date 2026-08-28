@@ -6,7 +6,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "DEPLOYMENT_STAGE": "phase-b-live-spike",
-    "ALLOWED_ORIGIN": "https://afterlight-app.pages.dev",
+    "ALLOWED_ORIGIN": "https://afterlight-app.pages.dev,https://afterlight.dolepee.com",
     "AFTERLIGHT_CONTRACT": "0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25",
     "STARKNET_CHAIN_ID": "0x534e5f4d41494e",
     "STRK_TOKEN": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",

@@ -7,6 +7,7 @@ import {
   RelayHttpError,
   corsHeaders,
   jsonResponse,
+  isAllowedOrigin,
   parsePositiveDecimal,
   prepareCheckpointPlan,
   prepareRelayPlan,
@@ -37,6 +38,7 @@ const EXIT_INTENT_HEADER = "claim-exit";
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const requestOrigin = request.headers.get("origin") ?? "";
     try {
       if (request.method === "GET" && url.pathname === HEALTH_PATH) {
         return health(env);
@@ -67,7 +69,7 @@ export default {
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
         const result = await executePreparedClaim(payload, env, budget);
-        return jsonResponse({ status: "relayed", result }, 200, corsHeaders(env.ALLOWED_ORIGIN));
+        return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
@@ -108,7 +110,7 @@ export default {
             estimate: simulation,
           },
           200,
-          corsHeaders(env.ALLOWED_ORIGIN),
+          corsHeaders(requestOrigin),
         );
       }
 
@@ -134,7 +136,7 @@ export default {
         return jsonResponse(
           { status: "relayed", result },
           200,
-          corsHeaders(env.ALLOWED_ORIGIN),
+          corsHeaders(requestOrigin),
         );
       }
 
@@ -145,7 +147,7 @@ export default {
           plan,
         },
         202,
-        corsHeaders(env.ALLOWED_ORIGIN),
+        corsHeaders(requestOrigin),
       );
     } catch (error) {
       const executorCode = executorErrorCode(error);
@@ -169,8 +171,8 @@ export default {
       return jsonResponse(
         { status: "error", code: handled.code },
         handled.status,
-        request.headers.get("origin") === env.ALLOWED_ORIGIN
-          ? corsHeaders(env.ALLOWED_ORIGIN)
+        isAllowedOrigin(request.headers.get("origin"), env.ALLOWED_ORIGIN)
+          ? corsHeaders(requestOrigin)
           : undefined,
       );
     }
@@ -230,13 +232,13 @@ function isSubmissionEnabled(value: string): boolean {
 function preflight(request: Request, env: Env): Response {
   const origin = request.headers.get("origin");
   const intent = request.headers.get("access-control-request-headers")?.toLowerCase() ?? "";
-  if (origin !== env.ALLOWED_ORIGIN || !intent.includes("x-afterlight-intent")) {
+  if (!isAllowedOrigin(origin, env.ALLOWED_ORIGIN) || !intent.includes("x-afterlight-intent")) {
     throw new RelayHttpError(403, "origin_not_allowed");
   }
   return new Response(null, {
     status: 204,
     headers: {
-      ...corsHeaders(env.ALLOWED_ORIGIN),
+      ...corsHeaders(origin),
       "cache-control": "no-store",
       "x-afterlight-intent":
         new URL(request.url).pathname === CHECKPOINT_PATH
@@ -249,7 +251,7 @@ function preflight(request: Request, env: Env): Response {
 }
 
 function requireExitHeaders(request: Request, env: Env): void {
-  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new RelayHttpError(403, "origin_not_allowed");
+  if (!isAllowedOrigin(request.headers.get("origin"), env.ALLOWED_ORIGIN)) throw new RelayHttpError(403, "origin_not_allowed");
   if (request.headers.get("x-afterlight-intent") !== EXIT_INTENT_HEADER) throw new RelayHttpError(400, "invalid_exit_intent");
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") throw new RelayHttpError(415, "invalid_content_type");

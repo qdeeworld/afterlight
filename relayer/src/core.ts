@@ -261,7 +261,7 @@ export async function readUtf8BodyLimited(request: Request, byteLimit: number): 
 
 export function requireRelayHeaders(request: Request, env: Env): void {
   const origin = request.headers.get("origin");
-  if (origin !== env.ALLOWED_ORIGIN) throw new RelayHttpError(403, "origin_not_allowed");
+  if (!isAllowedOrigin(origin, env.ALLOWED_ORIGIN)) throw new RelayHttpError(403, "origin_not_allowed");
   const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
     throw new RelayHttpError(415, "content_type_required");
@@ -272,7 +272,7 @@ export function requireRelayHeaders(request: Request, env: Env): void {
 }
 
 export async function requireCheckpointHeaders(request: Request, env: Env): Promise<void> {
-  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) {
+  if (!isAllowedOrigin(request.headers.get("origin"), env.ALLOWED_ORIGIN)) {
     throw new RelayHttpError(403, "origin_not_allowed");
   }
   if (request.headers.get("x-afterlight-intent") !== CHECKPOINT_INTENT_HEADER) {
@@ -306,6 +306,11 @@ export function corsHeaders(origin: string): HeadersInit {
     "access-control-max-age": "600",
     vary: "Origin",
   };
+}
+
+export function isAllowedOrigin(origin: string | null, configuredOrigins: string): origin is string {
+  if (origin === null) return false;
+  return configuredOrigins.split(",").some((allowed) => allowed === origin);
 }
 
 export function jsonResponse(
