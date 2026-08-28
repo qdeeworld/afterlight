@@ -84,15 +84,22 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
     plugins: false,
   });
-  if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new ExitExecutorError("exit_unavailable");
+  try {
+    if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new Error("wrong_chain");
+  } catch { throw exitStage("chain"); }
   const account = new Account({ provider, address: NEUTRAL, signer: env.RELAYER_ACCOUNT_PRIVATE_KEY, cairoVersion: "1", transactionVersion: "0x3", plugins: false });
-  const policy = validatePolicy(EXIT_POLICY);
-  const estimateBlock = await provider.getBlockWithTxHashes("latest");
+  let policy;
+  try { policy = validatePolicy(EXIT_POLICY); } catch { throw exitStage("policy"); }
+  let estimateBlock;
+  try { estimateBlock = await provider.getBlockWithTxHashes("latest"); } catch { throw exitStage("estimate_block"); }
   if (!("block_number" in estimateBlock) || !("block_hash" in estimateBlock)) throw new ExitExecutorError("exit_unavailable");
   const blockNumber = BigInt(estimateBlock.block_number);
   const blockTimestamp = BigInt(estimateBlock.timestamp);
-  const snapshot = await readSnapshot(provider, validated, blockNumber, blockTimestamp);
-  validateAuthorizationInclusionWindow(validated.metadata.validUntil, blockTimestamp, BigInt(Math.floor(Date.now() / 1_000)));
+  let snapshot;
+  try { snapshot = await readSnapshot(provider, validated, blockNumber, blockTimestamp); } catch { throw exitStage("snapshot"); }
+  try {
+    validateAuthorizationInclusionWindow(validated.metadata.validUntil, blockTimestamp, BigInt(Math.floor(Date.now() / 1_000)));
+  } catch { throw exitStage("inclusion_window"); }
   const proofFacts = validated.proof.facts.facts.map(hex);
   const call: Call = { contractAddress: validated.call.contractAddress, entrypoint: validated.call.entrypoint, calldata: validated.call.calldata.map(hex) };
   let estimate;
@@ -109,12 +116,16 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       nonceDataAvailabilityMode: "L1",
       feeDataAvailabilityMode: "L1",
     });
-  } catch { throw new ExitExecutorError("exit_unavailable"); }
-  const sourceBounds = parseResourceBounds(estimate.resourceBounds);
-  const bounds = addResourceMargins(sourceBounds, policy.amountMarginBps, policy.priceMarginBps);
-  const networkCap = resourceCapFri(bounds);
-  if (networkCap > policy.networkCapFri) throw new ExitExecutorError("exit_unavailable");
-  validateBalanceForExit(snapshot.balance, networkCap, BigInt(EXIT_POLICY.postSpendHealthFloorFri));
+  } catch { throw exitStage("estimate"); }
+  let bounds;
+  let networkCap;
+  try {
+    const sourceBounds = parseResourceBounds(estimate.resourceBounds);
+    bounds = addResourceMargins(sourceBounds, policy.amountMarginBps, policy.priceMarginBps);
+    networkCap = resourceCapFri(bounds);
+    if (networkCap > policy.networkCapFri) throw new Error("network_cap");
+    validateBalanceForExit(snapshot.balance, networkCap, BigInt(EXIT_POLICY.postSpendHealthFloorFri));
+  } catch { throw exitStage("fee_and_balance"); }
 
   const reservation = await budget.reserve({
     dayKey: new Date().toISOString().slice(0, 10),
@@ -206,4 +217,11 @@ function readFee(value: unknown): string {
   if (typeof value !== "object" || value === null) return "0";
   const amount = (value as Record<string, unknown>).amount;
   return typeof amount === "string" ? BigInt(amount).toString() : "0";
+}
+
+function exitStage(stage: string): ExitExecutorError {
+  // Never include request material, proof fields, note IDs, signatures, vaults,
+  // wallet addresses, IPs, RPC payloads, or raw exception messages.
+  console.error(JSON.stringify({ event: "exit_preflight_rejected", stage }));
+  return new ExitExecutorError("exit_unavailable");
 }
