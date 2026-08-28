@@ -2,6 +2,8 @@ target/
 .snfoundry_cache/
 client/node_modules/
 client/dist/
+web/node_modules/
+web/dist/
 client/tools/ready-quote.js
 client/tools/mainnet-operator.js
 client/tools/declarer-funding.*

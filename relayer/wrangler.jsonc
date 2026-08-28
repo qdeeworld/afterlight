@@ -2,17 +2,18 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "afterlight-relayer-phase-a",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-24",
+  "compatibility_date": "2026-08-28",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "DEPLOYMENT_STAGE": "phase-b-live-spike",
-    "ALLOWED_ORIGIN": "http://127.0.0.1:43117",
+    "ALLOWED_ORIGIN": "https://afterlight-app.pages.dev",
     "AFTERLIGHT_CONTRACT": "0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25",
     "STARKNET_CHAIN_ID": "0x534e5f4d41494e",
     "STRK_TOKEN": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
     "RESERVE_AMOUNT_FRI": "1000000000000000000",
     "MAX_RELAY_TTL_SECONDS": "900",
     "MAX_RELAY_PAYLOAD_BYTES": "2048",
+    "MAX_EXIT_PAYLOAD_BYTES": "2097152",
     "MAX_SPONSORED_FEE_FRI": "200000000000000000",
     "DAILY_SPONSOR_BUDGET_FRI": "1200000000000000000",
     "SPONSOR_FEE_MARGIN_BPS": "11000",
@@ -21,7 +22,7 @@
     "RELAYER_ACCOUNT_ADDRESS": "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46",
     "RELAYER_ACCOUNT_CAIRO_VERSION": "1",
     "STARKNET_RPC_URL": "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_10",
-    "SUBMIT_ENABLED": "false"
+    "SUBMIT_ENABLED": "true"
   },
   // Names only: values must be installed with `wrangler secret put` after promotion.
   "secrets": {
@@ -53,6 +54,11 @@
       "name": "CHECKPOINT_RATE_LIMITER",
       "namespace_id": "73003",
       "simple": { "limit": 4, "period": 60 }
+    },
+    {
+      "name": "EXIT_RATE_LIMITER",
+      "namespace_id": "73004",
+      "simple": { "limit": 2, "period": 60 }
     }
   ],
   "observability": {

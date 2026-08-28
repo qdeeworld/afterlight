@@ -4,7 +4,7 @@
   // both signer and authenticated-RPC secrets before Wrangler may deploy it.
   "name": "afterlight-relayer-phase-a",
   "main": "src/index.ts",
-  "compatibility_date": "2026-08-24",
+  "compatibility_date": "2026-08-27",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
     "DEPLOYMENT_STAGE": "phase-a-staging",
@@ -15,6 +15,7 @@
     "RESERVE_AMOUNT_FRI": "10000000000000000000",
     "MAX_RELAY_TTL_SECONDS": "900",
     "MAX_RELAY_PAYLOAD_BYTES": "2048",
+    "MAX_EXIT_PAYLOAD_BYTES": "2097152",
     "MAX_SPONSORED_FEE_FRI": "200000000000000000",
     "DAILY_SPONSOR_BUDGET_FRI": "1200000000000000000",
     "SPONSOR_FEE_MARGIN_BPS": "11000",
@@ -48,6 +49,11 @@
       "name": "CHECKPOINT_RATE_LIMITER",
       "namespace_id": "73003",
       "simple": { "limit": 4, "period": 60 }
+    },
+    {
+      "name": "EXIT_RATE_LIMITER",
+      "namespace_id": "73004",
+      "simple": { "limit": 2, "period": 60 }
     }
   ],
   "observability": {

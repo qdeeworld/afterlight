@@ -69,7 +69,7 @@ library boundary explicit.
    authorization to that exact note, token, amount, vault, epoch, and nonce,
    and privately execute `CANCEL_REFUND` through STRK20.
 
-## Planned successor journey
+## Successor journey
 
 1. Generate and back up a fresh successor application key on the successor's
    own device; share only its public key with the owner.
@@ -83,12 +83,11 @@ library boundary explicit.
 5. After grace, ask Ready X to prepare a fresh successor destination open note.
    Bind `CLAIM` to the resolved note ID, token, amount, vault, state, epoch, and
    successor nonce.
-6. The E1 preflight validates the prepared call, proof envelope, exact note, and
-   accepted base-block identity without submitting. Ready normally recompiles a
-   fee-bearing proof for submission rather than consuming that prepared proof.
-   If an intervening wallet action changes the destination note index, the
-   recomputed note differs and the exact-note application signature must make
-   the onchain helper fail closed.
+6. Afterlight validates the prepared call, proof envelope, exact note, and
+   accepted base-block identity, then submits the locked package through the
+   bounded neutral sponsor. If an intervening wallet action changes the
+   destination note index, the exact-note application signature makes the
+   onchain helper fail closed.
 7. Treat recovery as complete only after the mainnet receipt succeeds, the
    Afterlight liability is reduced exactly once, and the successor's shielded
    balance shows the returned note.

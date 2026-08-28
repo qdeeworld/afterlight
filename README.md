@@ -6,9 +6,9 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 ## Current status
 
-**Evidence level: E1 pending one balance-visibility check.** The complete two-branch recovery mechanism has run on Starknet Mainnet. Four successful transactions touch both the canonical STRK20 pool and Afterlight, including exact-note private cancellation and successor recovery. The contract, client, and neutral-relayer controls also have deterministic local coverage. Promotion to E2 remains intentionally blocked until Ready X exposes the successor's post-claim shielded balance after finality.
+**Evidence level: E2 observable replay.** The complete two-branch recovery mechanism has run on Starknet Mainnet. Four successful transactions touch both the canonical STRK20 pool and Afterlight, including exact-note private cancellation and successor recovery. After L1 finality, a fresh Ready X read showed the successor's shielded balance increase from `6 STRK` to `7 STRK`, reconciling the exact `1 STRK` recovery output while the neutral sponsor paid the separate pool fee.
 
-**Release status: deployed mechanism, public product pending.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). Vault A completed `FUND -> CANCEL_REFUND`; Vault B completed early refusal, heartbeat, request, veto, second request, and `CLAIM`. The bounded neutral relayer executed the control path without using either Ready role as the outer sender and is submission-disabled after the spike. A public user-ready interface and E3 completion do not exist yet.
+**Release status: deployed mechanism and public-product candidate; fresh E3 pending.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). Vault A completed `FUND -> CANCEL_REFUND`; Vault B completed early refusal, heartbeat, request, veto, second request, and `CLAIM`. The bounded neutral relayer executed the control path without using either Ready role as the outer sender. The public app now supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, and post-claim balance reconciliation. It is not classified E3 until a fresh user completes that path through the deployed interface.
 
 ## Recovery flow
 
@@ -39,6 +39,7 @@ Afterlight does not claim legal inheritance, invisible authorization keys, proof
 - `tests/` — Cairo unit and integration tests
 - `client/` — application keys, typed authorization messages, Ready/STRK20 action assembly
 - `relayer/` — fail-closed neutral-relayer implementation and operational controls
+- `web/` — user-first owner and successor journeys for the deployed Mainnet release
 - `docs/ARCHITECTURE.md` — component boundaries, action routing, state and accounting model
 - `docs/THREAT_MODEL.md` — protected assets, trust assumptions, privacy limits, and failure handling
 - `docs/READY_X_ONBOARDING.md` — Ready X prerequisites and owner/successor flow
@@ -74,13 +75,16 @@ npm --prefix client test
 
 npm --prefix relayer ci
 npm --prefix relayer run check
+
+npm --prefix web ci
+npm --prefix web run build
 ```
 
 The public CI workflow also rebuilds the locked `spike-inline-56` deployment
 profile and verifies its exact Sierra and compiled class hashes before running
-the Cairo, client, and relayer tests. It audits both npm trees, checks relayer
-types and lint rules, and builds a submission-disabled Cloudflare Worker dry
-run.
+the Cairo, client, relayer, and web checks. It audits every npm tree, checks
+relayer types and lint rules, builds both Worker configurations without
+submitting, and compiles the production web bundle.
 
 No wallet seed, application private key, or relayer secret belongs in source control. The relayer remains unable to submit transactions unless its complete production configuration is installed and its explicit submission switch is enabled.
 

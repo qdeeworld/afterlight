@@ -9,7 +9,7 @@ Afterlight separates private value movement, application authorization, and tran
 | Ready X and STRK20 | Shielded balances, private invocation, proof preparation, and exact open-note settlement | Owner or successor application secrets outside the user's device |
 | Afterlight Cairo contract | Vault state, signed authorization, liabilities, timing, exact-note binding, and terminal settlement | Ready wallet identity assumptions |
 | Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, proof-envelope/call binding, and independent managed-exit receipt reconciliation | Relayer account key |
-| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, and checkpoint transactions from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
+| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, checkpoints, and strictly validated exact-note claim packages from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
 
 ## Action routing
 
@@ -17,14 +17,13 @@ Afterlight separates private value movement, application authorization, and tran
 
 `HEARTBEAT`, `REQUEST`, and `VETO` are public state transitions authorized by per-vault Stark signatures. Any submitter may relay a valid authorization; the submitter is never the authority.
 
-Ready-managed private exits retain the literal role-signed destination note in
-the helper invocation while Ready creates the corresponding OPEN note and pays
-its fee through the observed private sponsor envelope. After inclusion, the
-client independently parses the actual outer transaction and rejects a Ready
-role address as sender, sponsor-envelope drift, extra public transfers, a
-different note or helper call, a failed receipt, or incorrect shielded-balance
-and liability deltas. This is a post-receipt check; it does not turn preparation
-into execution evidence.
+For a public claim, Ready creates the exact OPEN note and proof locally. The
+successor application key binds that literal note to the current vault, epoch,
+nonce, token and amount. A neutral sponsor accepts only the locked pool call,
+proof facts, application signature, live state, exact allowance and bounded
+resource quote, then signs and broadcasts the outer transaction once. The
+contract and pool remain authoritative; package preparation alone is not
+execution evidence.
 
 ```text
 Ready X + STRK20 pool
@@ -83,4 +82,4 @@ recovery of tokens sent directly to the helper.
 
 ## Current release boundary
 
-The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two vaults completed the cancellation and recovery branches, and all four STRK20 receipts are listed in `strk20.json`. The public product UI remains outside this release, and E2 promotion still requires Ready X to expose the successor's post-claim shielded balance after finality.
+The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two vaults completed the cancellation and recovery branches, and all four STRK20 receipts are listed in `strk20.json`. A fresh Ready X read reconciled the successor's shielded balance from `6 STRK` to `7 STRK`, so the mechanism is E2. The public UI and neutral claim route are deployed candidates; E3 requires one fresh end-to-end completion through that interface.

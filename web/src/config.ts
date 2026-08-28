@@ -1,0 +1,12 @@
+export const CHAIN_ID = "0x534e5f4d41494e";
+export const CONTRACT = "0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25";
+export const POOL = "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
+export const STRK = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+export const RPC_URL = "https://rpc.starknet.lava.build";
+export const RELAYER_URL = "https://afterlight-relayer-phase-a.qdworld001.workers.dev";
+export const AMOUNT_FRI = "1000000000000000000";
+export const POOL_FEE_FRI = "6000000000000000000";
+export const FAST_INACTIVITY_SECONDS = "300";
+export const FAST_GRACE_SECONDS = "300";
+export const AUTH_TTL_SECONDS = 600;
+export const READY_VERSION = "5.33.9";

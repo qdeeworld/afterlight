@@ -2,22 +2,42 @@
 version: alpha
 name: Afterlight
 description: User-first interaction guidance for a private Starknet recovery reserve.
+colors:
+  ink: "#191915"
+  muted: "#68685f"
+  paper: "#FFFDF8"
+  line: "#D8D3C8"
+  accent: "#D86F31"
+  accent-dark: "#8E3514"
+  soft: "#EBE6DB"
+typography:
+  body:
+    fontFamily: Inter, ui-sans-serif, system-ui, sans-serif
+  headline:
+    fontFamily: Georgia, Times New Roman, serif
+    fontWeight: 500
+    lineHeight: 0.98
+    letterSpacing: -0.045em
 omitted:
-  - section: colors
-    reason: No public product palette has been selected.
-  - section: typography
-    reason: No public product type system has been selected.
   - section: spacing
-    reason: No shared product spacing tokens exist yet.
+    reason: Layout spacing is evidenced, but no named shared spacing scale exists.
   - section: rounded
-    reason: No shared product shape tokens exist yet.
+    reason: Repeated radii exist, but no named shared radius scale exists.
   - section: components
-    reason: Product components have not been implemented yet.
+    reason: Shared component behavior is documented in prose without a token contract.
 ---
 
 ## Overview
 
 Afterlight is an ordinary self-custody recovery product, not an evaluator surface. Lead with the useful result: create a bounded private recovery reserve, remain in control through heartbeat and veto, and let only the designated successor key authorize recovery after inactivity and grace. Keep STRK20 receipts and technical proof contextual to the action that produced them.
+
+## Colors
+
+Use warm paper and soft neutral surfaces to keep the recovery journey calm and legible. Ink carries primary text and actions; muted supports explanatory copy; the earthy accent identifies privacy guidance and selected controls without becoming a decorative gradient. Reserve distinct success and error treatments for state feedback, and never rely on color alone.
+
+## Typography
+
+Use the body family for controls, instructions, wallet state and receipts. Use the headline family only for the product promise and major journey titles; its restrained weight and tight setting establish hierarchy without turning operational screens into marketing pages.
 
 ## Layout
 

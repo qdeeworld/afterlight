@@ -191,6 +191,47 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(deniedIntent.status).toBe(400);
   });
 
+  it("exposes the exact-note exit only behind the configured origin, intent and strict package validator", async () => {
+    const preflight = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/exit", {
+        method: "OPTIONS",
+        headers: {
+          origin,
+          "access-control-request-headers": "content-type, x-afterlight-intent",
+        },
+      }),
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get("x-afterlight-intent")).toBe("claim-exit");
+
+    const invalid = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/exit", {
+        method: "POST",
+        headers: {
+          origin,
+          "content-type": "application/json",
+          "x-afterlight-intent": "claim-exit",
+        },
+        body: "{}",
+      }),
+    );
+    expect(invalid.status).toBe(422);
+    expect(await invalid.json()).toEqual({ status: "error", code: "invalid_exit" });
+
+    const wrongOrigin = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/exit", {
+        method: "POST",
+        headers: {
+          origin: "https://attacker.invalid",
+          "content-type": "application/json",
+          "x-afterlight-intent": "claim-exit",
+        },
+        body: "{}",
+      }),
+    );
+    expect(wrongOrigin.status).toBe(403);
+  });
+
   it("derives exact fingerprints from normalized fields, not attacker-controlled JSON ordering", async () => {
     const canonical = buildRelayRequest(RelayOperation.Heartbeat, contract, {
       ...validArgs(1n),

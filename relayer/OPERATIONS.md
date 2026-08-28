@@ -1,14 +1,14 @@
 # Neutral relayer operations
 
-This runbook applies only after Afterlight passes its E2 spike and build gate. The checked-in configuration is intentionally inert and must not be enabled as a shortcut.
+This runbook applies to the E2-passed production relayer and its inert staging profile.
 
 ## Hosting boundary
 
-- Runtime: direct Cloudflare Worker with the `RelayBudget` SQLite Durable Object and three Rate Limiting bindings.
+- Runtime: direct Cloudflare Worker with the `RelayBudget` SQLite Durable Object and four Rate Limiting bindings.
 - Public product hostname: `afterlight.dolepee.com` on Cloudflare Pages through the existing external DNS zone.
-- Relayer exposure: bind the relayer Worker privately to the Pages application and proxy only `/v1/relay`, `/v1/checkpoint`, and `/health` through the product origin. Disable the relayer's public `workers.dev` route after the service binding is verified.
+- Relayer exposure: the current Worker remains on its stable provider hostname with strict product-origin CORS. A future same-origin proxy may expose only `/v1/relay`, `/v1/checkpoint`, `/v1/exit`, and `/health`; disable the public route only after that proxy is verified.
 - Do not migrate the `dolepee.com` authoritative nameservers merely to attach a Worker Custom Domain. Any zone migration is a separate, explicitly approved operation.
-- Connect Windscribe before every direct Cloudflare CLI or dashboard operation and disconnect it afterward.
+- Use Wrangler on the normal network. Use Windscribe only if a required Cloudflare-owned dashboard or OAuth page will not open, and disconnect it immediately after that browser sequence.
 
 ## Required production values
 
@@ -20,7 +20,7 @@ Replace every inert value and verify it against the exact released contract:
 - production RPC URL;
 - product origin;
 - per-call fee cap, daily sponsorship budget, balance alert threshold, and fee margin;
-- deployment-specific namespaces for relay, global, and checkpoint rate limits.
+- deployment-specific namespaces for relay, global, checkpoint, and exit rate limits.
 
 The account's Cloudflare plan rejects custom Worker CPU limits, so the release
 uses the platform CPU default. Preserve the explicit application-level payload,
@@ -32,12 +32,12 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 ## Promotion sequence
 
 1. Run `npm ci`, `npm run types`, `npm run check`, and `npm audit` on the exact commit.
-2. Keep `SUBMIT_ENABLED=false`; deploy the Worker and Durable Object migration.
-3. Verify `/health` reports submission disabled and exposes no address, endpoint, balance, secret state, wallet, vault, or request identifier.
-4. Verify the Pages service binding and same-origin proxy with empty or invalid requests only.
+2. For a new environment, keep `SUBMIT_ENABLED=false`; deploy the Worker and Durable Object migration.
+3. Verify `/health` reports the intended submission state and exposes no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
+4. Verify the configured-origin preflight and each route with empty or invalid requests only.
 5. Fund the bounded relayer account within the approved spike cap.
 6. Install secrets, verify configuration readiness, and obtain fresh no-submit quotes.
-7. Enable submission only for the bounded mainnet spike.
+7. Enable submission only within the bounded production sponsorship policy.
 8. Run one checkpoint and one signed control canary; reconcile their hashes, exact calldata, sender, actual FRI fee, and Durable Object totals.
 9. Confirm direct `workers.dev` access is disabled and the public product route remains healthy.
 

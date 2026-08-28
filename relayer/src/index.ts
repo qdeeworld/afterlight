@@ -27,8 +27,12 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
+import { executePreparedClaim, ExitExecutorError } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
+
+const EXIT_PATH = "/v1/exit";
+const EXIT_INTENT_HEADER = "claim-exit";
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -43,7 +47,10 @@ export default {
       if (request.method === "OPTIONS" && url.pathname === CHECKPOINT_PATH) {
         return preflight(request, env);
       }
-      if (url.pathname !== RELAY_PATH && url.pathname !== CHECKPOINT_PATH) {
+      if (request.method === "OPTIONS" && url.pathname === EXIT_PATH) {
+        return preflight(request, env);
+      }
+      if (url.pathname !== RELAY_PATH && url.pathname !== CHECKPOINT_PATH && url.pathname !== EXIT_PATH) {
         return jsonResponse({ status: "error", code: "not_found" }, 404);
       }
       if (request.method !== "POST") {
@@ -54,7 +61,14 @@ export default {
 
       let plan: RelayPlan;
       let estimateOnly = false;
-      if (url.pathname === CHECKPOINT_PATH) {
+      if (url.pathname === EXIT_PATH) {
+        requireExitHeaders(request, env);
+        await rateLimitExit(env);
+        const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
+        const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
+        const result = await executePreparedClaim(payload, env, budget);
+        return jsonResponse({ status: "relayed", result }, 200, corsHeaders(env.ALLOWED_ORIGIN));
+      } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
         plan = await prepareCheckpointPlan(env, Date.now());
@@ -138,6 +152,8 @@ export default {
       const handled =
         error instanceof RelayHttpError
           ? error
+          : error instanceof ExitExecutorError
+            ? new RelayHttpError(error.code === "invalid_exit" ? 422 : error.code === "exit_busy" ? 503 : 502, error.code)
           : executorCode !== undefined
             ? new RelayHttpError(executorCode === "relayer_busy" ? 503 : 502, executorCode)
           : new RelayHttpError(500, "internal_error");
@@ -225,7 +241,26 @@ function preflight(request: Request, env: Env): Response {
       "x-afterlight-intent":
         new URL(request.url).pathname === CHECKPOINT_PATH
           ? CHECKPOINT_INTENT_HEADER
-          : RELAY_INTENT_HEADER,
+          : new URL(request.url).pathname === EXIT_PATH
+            ? EXIT_INTENT_HEADER
+            : RELAY_INTENT_HEADER,
     },
   });
+}
+
+function requireExitHeaders(request: Request, env: Env): void {
+  if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) throw new RelayHttpError(403, "origin_not_allowed");
+  if (request.headers.get("x-afterlight-intent") !== EXIT_INTENT_HEADER) throw new RelayHttpError(400, "invalid_exit_intent");
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") throw new RelayHttpError(415, "invalid_content_type");
+}
+
+async function rateLimitExit(env: Env): Promise<void> {
+  const [globalOutcome, exitOutcome] = await Promise.all([
+    env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" }),
+    env.EXIT_RATE_LIMITER.limit({ key: "afterlight-claim-exit-global-v1" }),
+  ]);
+  if (!globalOutcome.success || !exitOutcome.success) {
+    throw new RelayHttpError(429, "rate_limited");
+  }
 }

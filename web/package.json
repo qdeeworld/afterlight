@@ -1,0 +1,21 @@
+{
+  "name": "afterlight-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@starknet-io/get-starknet-discovery": "^6.0.4",
+    "@starknet-io/get-starknet-wallet-standard": "^6.0.4",
+    "@starknet-io/types-js": "0.10.4-beta.2",
+    "starknet": "10.7.0"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
+  }
+}

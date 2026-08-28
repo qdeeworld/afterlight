@@ -3,10 +3,11 @@
 ## Current evidence level
 
 Afterlight has a complete deployed Mainnet mechanism and four validator-qualified
-STRK20 receipts. It remains classified **E1 pending one visibility check**:
-Ready X has not yet exposed the successor's post-claim shielded balance through
-`wallet_strk20Balances`. Prepared, simulated, reverted, and unrelated pool
-transactions are not counted as successful evidence.
+STRK20 receipts. It is classified **E2 observable replay**. After L1 finality,
+a fresh approved Ready X `wallet_strk20Balances` read showed the successor at
+`7 STRK`, compared with the verified `6 STRK` pre-claim balance. Prepared,
+simulated, reverted, and unrelated pool transactions are not counted as
+successful evidence.
 
 ## Pinned Starknet Mainnet dependencies
 
@@ -53,7 +54,7 @@ contract. Plain Shield transactions and failed attempts do not fill these slots.
 The official hub validator's exact success, pool-touch, and declared-contract
 ownership checks pass for all four. Vault A is `CANCELLED`, Vault B is
 `CLAIMED`, total locked liability is zero, and the neutral pool allowance is
-zero. Exact-note settlement is proven onchain. The remaining promotion gap is
-the wallet's post-finality reconciliation from `6 STRK` to `1 STRK`: the exact
-`+1 STRK` recovery output minus the exact `6 STRK` private action fee. A public
-demo URL and final video remain pending.
+zero. Exact-note settlement is proven onchain. The wallet's post-finality
+reconciliation is `6 STRK -> 7 STRK`: the exact `+1 STRK` recovery output was
+added to the beneficiary while the neutral sponsor paid the separate `6 STRK`
+pool fee. A fresh E3 public-interface lifecycle and final video remain pending.

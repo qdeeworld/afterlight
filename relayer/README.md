@@ -1,12 +1,12 @@
-# Afterlight neutral relayer (E1/pre-production)
+# Afterlight neutral relayer
 
 This directory contains the tested neutral control-plane relayer implementation.
-It consumes the canonical `afterlight-relay/1` schema from `../client`, accepts
-only `HEARTBEAT`, `REQUEST`, and `VETO`, and includes a fail-closed Starknet v3
-signer/RPC adapter. An inert, submission-disabled staging Worker exercises
-packaging and health monitoring, but there is no funded or production relayer
-and no live recovery service. The signing path remains unreachable until every
-production setting and secret is present and `SUBMIT_ENABLED=true`.
+It consumes the canonical `afterlight-relay/1` control schema from `../client`,
+accepts `HEARTBEAT`, `REQUEST`, and `VETO`, and includes a fail-closed Starknet
+v3 signer/RPC adapter. It also accepts a strict `afterlight-prepared-neutral-exit/1`
+package for public `CLAIM` settlement. The production Worker is deployed and
+funded; a separate submission-disabled configuration remains available for
+inert packaging and health tests.
 
 ## Proven locally
 
@@ -25,22 +25,24 @@ production setting and secret is present and `SUBMIT_ENABLED=true`.
 - Starknet v3 simulation freezes the nonce and exact resource bounds. The budget reserves a larger policy maximum; signing reuses the frozen bounds without estimating again and rejects encoded exposure above the reservation.
 - Submitted and mined account transactions are reconciled against the neutral account and exact Cairo execute calldata before the receipt is accepted.
 - `POST /v1/checkpoint` builds the permissionless `sync_funding_checkpoint` call with no request body, wallet, vault, note, or signature identifier. A global 15-second idempotency bucket and dedicated rate limiter bound sponsorship.
+- `POST /v1/exit` accepts only a designated-key-authorized `CLAIM` package from the configured product origin. It locks the exact pool call, proof data/output/facts, application signature, destination note, live vault state, classes, allowance, balance, resource quote, and outer transaction hash before one broadcast.
 
-## Production blockers (intentional)
+## Production configuration
 
-Do not set `SUBMIT_ENABLED=true` on the checked-in pre-production Worker. The
-adapter exists for static review and local tests, but the checked-in
-configuration is deliberately non-executable. Before funded Phase B:
+The checked-in production profile describes the deployed release but contains
+no secret values. A fresh deployment is executable only when its two required
+Cloudflare secrets already exist and `SUBMIT_ENABLED=true`. Before changing the
+release:
 
 1. Replace `DEPLOYMENT_ID`, stage, contract, origin, RPC URL, relayer account, and both rate-limit namespace IDs with deployment-specific values.
 2. Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` through `wrangler secret put`; never put their values in source, config, logs, or client variables.
 3. Independently review the concrete `StarknetV3RelayAdapter` and exercise its exact nonce, resource-bound, signed calldata, sender, receipt, and fee-unit checks against the deployment account.
 4. Exercise the Durable Object migration, RPC provider, account nonce, balance alert, checkpoint route, receipt timeout/reconciliation runbook, and rollback under a non-funded staging profile.
 5. Confirm the ordinary owner Ready address never submits the public checkpoint; only the neutral relayer may call it immediately before a private FUND.
-6. Only then install the secrets and enable submission in a reviewed promotion commit. A flag without complete configuration still fails closed.
+6. Only then install or retain the secrets and enable submission in a reviewed release. A flag without complete configuration still fails closed.
 
 Run `npm ci`, then `npm run check`. The tested toolchain is Node.js `22.13.1`
-with the committed npm lockfile and Wrangler `4.125.0`. `npm run dry-run` only
+with the committed npm lockfile and Wrangler `4.127.1`. `npm run dry-run` only
 bundles locally; nothing is deployed.
 
 `wrangler.staging.jsonc` is a separate inert deployment profile. It deliberately
