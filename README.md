@@ -4,6 +4,10 @@ Afterlight is a private, bounded recovery reserve for Starknet self-custody wall
 
 An owner privately funds a fixed reserve through STRK20 and remains in control through authenticated heartbeats and a veto window. If no authenticated heartbeat arrives during the configured interval, only the designated successor application key can authorize recovery to one exact private destination after the grace period.
 
+[Open Afterlight](https://afterlight.dolepee.com) · [Mainnet evidence](docs/MAINNET.md) · [Deployed contract](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25)
+
+[![CI](https://github.com/dolepee/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/dolepee/afterlight/actions/workflows/ci.yml)
+
 ## Current status
 
 **Evidence level: E2 observable replay.** The complete two-branch recovery mechanism has run on Starknet Mainnet. Four successful transactions touch both the canonical STRK20 pool and Afterlight, including exact-note private cancellation and successor recovery. After L1 finality, a fresh Ready X read showed the successor's shielded balance increase from `6 STRK` to `7 STRK`, reconciling the exact `1 STRK` recovery output while the neutral sponsor paid the separate pool fee.
