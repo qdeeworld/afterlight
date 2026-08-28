@@ -41,7 +41,11 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
   if (feature.walletVersion !== READY_VERSION) throw new Error(`Ready X ${READY_VERSION} is required; detected ${String(feature.walletVersion)}.`);
-  const account = await WalletAccountV6.connectSilent(provider, wallet as never);
+  // This function runs only from the explicit Connect Ready X button. Use the
+  // interactive Wallet Standard flow so a profile that has not authorized
+  // Afterlight yet can actually approve the connection. Silent mode is only
+  // suitable for restoring an authorization that already exists.
+  const account = await WalletAccountV6.connect(provider, wallet as never);
   const chainId = num.toHex(BigInt(await walletV6.requestChainId(wallet as never)));
   const accounts = await walletV6.requestAccounts(wallet as never, true);
   if (chainId !== CHAIN_ID) throw new Error("Switch Ready X to Starknet Mainnet.");
