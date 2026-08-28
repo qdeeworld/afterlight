@@ -40,8 +40,11 @@ const EXIT_POLICY = Object.freeze({
   // explicit ceiling above that proven reservation without weakening the
   // separate 1 STRK post-spend health floor.
   maxNetworkFeePerExitFri: "7500000000000000000",
-  amountMarginBps: "10300",
-  priceMarginBps: "10300",
+  // The RPC response already supplies full resource bounds. Reusing those
+  // exact bounds avoids compounding a 3% amount pad with a second 3% price pad
+  // after the user-approved 7.5 STRK hard ceiling.
+  amountMarginBps: "10000",
+  priceMarginBps: "10000",
   maxEstimateAgeBlocks: "300",
   minimumRpcSpec: "0.10.1",
   starknetJsVersion: "10.7.0",
