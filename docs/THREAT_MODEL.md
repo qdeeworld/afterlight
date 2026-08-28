@@ -63,7 +63,7 @@ Relayer availability is operationally important but not trusted for correctness.
 | Double claim or replay | Role nonce consumption and terminal vault state |
 | Owner veto races a mature claim | First valid included transition wins; the other sees changed state |
 | Failed token/pool settlement leaves false state | Cairo transaction rollback restores state and liability |
-| Surplus administrator is compromised | `recover_surplus` is public and privileged but can transfer only `held - locked`; it cannot alter vaults or withdraw accounted liabilities |
+| Tokens are donated directly to the helper | No administrative withdrawal exists; donated surplus remains inert and cannot change locked liabilities |
 | Relayer drains sponsorship | Schema limits, expiry, rate limits, per-call cap, daily budget, nonce serialization, and breach freeze |
 | Application logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from application logs; infrastructure metadata remains a separate limit |
 
@@ -91,13 +91,11 @@ The owner and successor each generate a fresh application key per vault. The suc
 
 Loss of an application secret can make its role unavailable. Compromise can authorize only operations within the signed domain and current contract state; it does not reveal a Ready seed or permit changing the exact destination of an already signed claim.
 
-The `surplus_admin` is not a vault owner or recovery authority. It is trusted
-only to choose where donated/unaccounted token surplus goes. Its address and
-recoveries are public, and users should not intentionally send donations to the
-contract expecting a refund.
+The contract has no administrative withdrawal path. Users should not send
+donations to the helper expecting a refund; unaccounted surplus remains inert.
 
 ## Tested failure classes
 
 The local suites cover caller, token, amount, mode, interval, key reuse, wrong-key, expiry, nonce, epoch, state, contract, chain, vault, destination, redirect, replay, double settlement, dust, surplus, liability isolation, timing boundaries, veto/claim races, and failed-transfer rollback.
 
-Mainnet privacy and availability claims remain unproven until a live Ready/STRK20 lifecycle produces reconciled receipts and balance changes.
+Mainnet receipts now prove the neutral-sender control path, both STRK20 funding actions, exact-note cancellation, exact-note successor recovery, terminal states, and zero remaining liability. The founder-controlled wallets share historical public funding correlation, so this run does not prove historically unrelated participants. Ready X's post-claim balance view remains pending after finality; no stronger E2/E4 claim is made until that evidence exists.

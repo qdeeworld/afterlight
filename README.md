@@ -6,9 +6,9 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 ## Current status
 
-**Evidence level: E1 (locally repeatable implementation evidence).** The recovery contract, application-key client, structural prepared-exit envelope validator, and neutral-relayer boundary have deterministic local test and build coverage. The locked deployment artifacts also reproduce locally.
+**Evidence level: E1 pending one balance-visibility check.** The complete two-branch recovery mechanism has run on Starknet Mainnet. Four successful transactions touch both the canonical STRK20 pool and Afterlight, including exact-note private cancellation and successor recovery. The contract, client, and neutral-relayer controls also have deterministic local coverage. Promotion to E2 remains intentionally blocked until Ready X exposes the successor's post-claim shielded balance after finality.
 
-**Release status: pre-deployment and not user-ready.** The Afterlight class and contract are not declared or deployed, no funded mainnet lifecycle has run, no qualifying transaction hashes exist, and no E2 mainnet result is claimed. The public relayer endpoint is an inert, submission-disabled packaging and health check; it is not a live recovery service.
+**Release status: deployed mechanism, public product pending.** Afterlight is deployed at `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Vault A completed `FUND -> CANCEL_REFUND`; Vault B completed early refusal, heartbeat, request, veto, second request, and `CLAIM`. The bounded neutral relayer executed the control path without using either Ready role as the outer sender and is submission-disabled after the spike. A public user-ready interface and E3 completion do not exist yet.
 
 ## Recovery flow
 
@@ -41,8 +41,8 @@ Afterlight does not claim legal inheritance, invisible authorization keys, proof
 - `relayer/` — fail-closed neutral-relayer implementation and operational controls
 - `docs/ARCHITECTURE.md` — component boundaries, action routing, state and accounting model
 - `docs/THREAT_MODEL.md` — protected assets, trust assumptions, privacy limits, and failure handling
-- `docs/READY_X_ONBOARDING.md` — pre-deployment Ready X prerequisites and planned owner/successor flow
-- `docs/MAINNET.md` — pinned Mainnet dependencies, locked artifacts, and intentionally empty evidence slots
+- `docs/READY_X_ONBOARDING.md` — Ready X prerequisites and owner/successor flow
+- `docs/MAINNET.md` — pinned Mainnet dependencies, deployed artifacts, and transaction evidence
 
 ## Design documentation
 

@@ -38,7 +38,6 @@ struct Env {
     pool: IMockPrivacyPoolDispatcher,
     token: IMockERC20Dispatcher,
     app: IAfterlightDispatcher,
-    admin: ContractAddress,
 }
 
 fn deploy_env() -> Env {
@@ -48,16 +47,14 @@ fn deploy_env() -> Env {
         .deploy(@array![])
         .unwrap();
     let (token_addr, _) = declare("MockERC20").unwrap().contract_class().deploy(@array![]).unwrap();
-    let admin: ContractAddress = 'surplus-admin'.try_into().unwrap();
     let (app_addr, _) = declare("Afterlight")
         .unwrap()
         .contract_class()
         .deploy(
             @array![
-                pool_addr.into(), token_addr.into(), admin.into(), AMOUNT.into(),
-                NORMAL_MIN_INACTIVITY.into(), NORMAL_MIN_GRACE.into(), FAST_INACTIVITY.into(),
-                FAST_GRACE.into(), MAX_INTERVAL.into(), MAX_AUTH_WINDOW.into(),
-                MAX_FUNDING_CHECKPOINT_AGE.into(),
+                pool_addr.into(), token_addr.into(), AMOUNT.into(), NORMAL_MIN_INACTIVITY.into(),
+                NORMAL_MIN_GRACE.into(), FAST_INACTIVITY.into(), FAST_GRACE.into(),
+                MAX_INTERVAL.into(), MAX_AUTH_WINDOW.into(), MAX_FUNDING_CHECKPOINT_AGE.into(),
             ],
         )
         .unwrap();
@@ -65,7 +62,6 @@ fn deploy_env() -> Env {
         pool: IMockPrivacyPoolDispatcher { contract_address: pool_addr },
         token: IMockERC20Dispatcher { contract_address: token_addr },
         app: IAfterlightDispatcher { contract_address: app_addr },
-        admin,
     };
     start_cheat_chain_id(env.app.contract_address, TEST_CHAIN_ID);
     set_time(env, START);
@@ -78,10 +74,10 @@ fn deploy_second_app(env: Env) -> IAfterlightDispatcher {
         .contract_class()
         .deploy(
             @array![
-                env.pool.contract_address.into(), env.token.contract_address.into(),
-                env.admin.into(), AMOUNT.into(), NORMAL_MIN_INACTIVITY.into(),
-                NORMAL_MIN_GRACE.into(), FAST_INACTIVITY.into(), FAST_GRACE.into(),
-                MAX_INTERVAL.into(), MAX_AUTH_WINDOW.into(), MAX_FUNDING_CHECKPOINT_AGE.into(),
+                env.pool.contract_address.into(), env.token.contract_address.into(), AMOUNT.into(),
+                NORMAL_MIN_INACTIVITY.into(), NORMAL_MIN_GRACE.into(), FAST_INACTIVITY.into(),
+                FAST_GRACE.into(), MAX_INTERVAL.into(), MAX_AUTH_WINDOW.into(),
+                MAX_FUNDING_CHECKPOINT_AGE.into(),
             ],
         )
         .unwrap();
@@ -972,34 +968,12 @@ fn failed_pool_pull_rolls_back_helper_and_pool_state() {
 }
 
 #[test]
-fn surplus_admin_can_recover_only_assets_above_locked_liabilities() {
-    let env = deploy_env();
-    let (owner, successor) = fresh_keys();
-    fund_vault(env, 'vault', owner, successor);
-    env.token.mint(env.app.contract_address, 77_u256);
-    let recipient: ContractAddress = 'surplus-recipient'.try_into().unwrap();
-    start_cheat_caller_address(env.app.contract_address, env.admin);
-    env.app.recover_surplus(recipient, 77_u256);
-    stop_cheat_caller_address(env.app.contract_address);
-    assert(env.token.balance_of(recipient) == 77, 'surplus not sent');
-    assert(env.token.balance_of(env.app.contract_address) == AMOUNT.into(), 'liability touched');
-    assert(
-        env.app.get_locked_by_token(env.token.contract_address) == AMOUNT.into(), 'lock changed',
-    );
-}
-
-#[test]
-fn open_checkpoint_neither_counts_as_liability_nor_weakens_private_exit() {
+fn donated_surplus_and_open_checkpoint_neither_count_as_liability_nor_weaken_private_exit() {
     let env = deploy_env();
     let (owner, successor) = fresh_keys();
     fund_vault(env, 'vault', owner, successor);
     env.token.mint(env.app.contract_address, 77_u256);
     env.app.sync_funding_checkpoint();
-    let recipient: ContractAddress = 'surplus-recipient'.try_into().unwrap();
-    start_cheat_caller_address(env.app.contract_address, env.admin);
-    env.app.recover_surplus(recipient, 77_u256);
-    stop_cheat_caller_address(env.app.contract_address);
-    assert(env.token.balance_of(env.app.contract_address) == AMOUNT.into(), 'liability touched');
     assert(
         env.app.get_locked_by_token(env.token.contract_address) == AMOUNT.into(), 'lock changed',
     );
@@ -1010,44 +984,8 @@ fn open_checkpoint_neither_counts_as_liability_nor_weakens_private_exit() {
     );
     invoke_private(env, PrivateAction::CancelRefund(cancel), 1);
     assert(env.pool.note_amount('owner-refund') == AMOUNT, 'exit underfunded');
-    assert(env.token.balance_of(env.app.contract_address) == 0, 'assets remain');
+    assert(env.token.balance_of(env.app.contract_address) == 77, 'donated surplus changed');
     assert(env.app.get_locked_by_token(env.token.contract_address) == 0, 'liability remains');
-}
-
-#[test]
-#[feature("safe_dispatcher")]
-fn failed_surplus_transfer_rolls_back_balances() {
-    let env = deploy_env();
-    env.token.mint(env.app.contract_address, 77_u256);
-    env.token.set_fail_transfer(true);
-    let recipient: ContractAddress = 'surplus-recipient'.try_into().unwrap();
-    start_cheat_caller_address(env.app.contract_address, env.admin);
-    let safe = IAfterlightSafeDispatcher { contract_address: env.app.contract_address };
-    match safe.recover_surplus(recipient, 77_u256) {
-        Result::Ok(_) => assert(false, 'transfer should fail'),
-        Result::Err(_) => {},
-    }
-    stop_cheat_caller_address(env.app.contract_address);
-    assert(env.token.balance_of(recipient) == 0, 'recipient credited');
-    assert(env.token.balance_of(env.app.contract_address) == 77, 'source debited');
-}
-
-#[test]
-#[should_panic(expected: 'AL_NOT_ADMIN')]
-fn non_admin_cannot_recover_surplus() {
-    let env = deploy_env();
-    env.token.mint(env.app.contract_address, 77_u256);
-    env.app.recover_surplus('recipient'.try_into().unwrap(), 1_u256);
-}
-
-#[test]
-#[should_panic(expected: 'AL_INSUFFICIENT_SURPLUS')]
-fn surplus_recovery_cannot_touch_locked_assets() {
-    let env = deploy_env();
-    let (owner, successor) = fresh_keys();
-    fund_vault(env, 'vault', owner, successor);
-    start_cheat_caller_address(env.app.contract_address, env.admin);
-    env.app.recover_surplus('recipient'.try_into().unwrap(), 1_u256);
 }
 
 #[test]

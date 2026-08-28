@@ -126,6 +126,27 @@ describe("fail-closed exact-call executor", () => {
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
   });
 
+  it("recovers a submitted checkpoint after its time-bucket semantic key changes", async () => {
+    const adapter = fakeAdapter();
+    adapter.reconcileReceipt = vi
+      .fn<StarknetRelayAdapter["reconcileReceipt"]>()
+      .mockResolvedValueOnce({ status: "pending" })
+      .mockResolvedValueOnce(successfulReceipt());
+    const budget = freshBudget();
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+      new ExecutorError("receipt_unreconciled"),
+    );
+    const nextBucket: RelayPlan = { ...plan, semanticKey: "b".repeat(64) };
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 15_000)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+      actualFeeFri: "70",
+    });
+    expect(adapter.simulateExact).toHaveBeenCalledTimes(1);
+    expect(adapter.signAndSubmitExact).toHaveBeenCalledTimes(1);
+    expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
+  });
+
   it("commits gas from a definitive reverted receipt and reports failure", async () => {
     const adapter = fakeAdapter({
       receipt: {

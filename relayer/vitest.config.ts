@@ -4,7 +4,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [
     cloudflareTest({
-      wrangler: { configPath: "./wrangler.jsonc" },
+      // Unit tests intentionally exercise the inert preflight surface. The
+      // production config is validated separately by Wrangler dry-run.
+      wrangler: { configPath: "./wrangler.staging.jsonc" },
     }),
   ],
 });

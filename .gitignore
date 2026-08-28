@@ -4,9 +4,14 @@ client/node_modules/
 client/dist/
 client/tools/ready-quote.js
 client/tools/mainnet-operator.js
+client/tools/declarer-funding.*
+client/tools/quote-declarer-funding.mjs
+client/tools/verify-declarer-funding.mjs
 client/tools/mainnet-operator-config.local.json
 client/tools/private-exit-preflight.js
 client/tools/private-exit-preflight.meta.json
+client/tools/successor-activation
+private-ready-lifecycle
 .DS_Store
 *.log
 .env

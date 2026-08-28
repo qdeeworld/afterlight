@@ -18,18 +18,15 @@ export const CANONICAL_STRK20_POOL =
   "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
 export const PINNED_STRK20_POOL_CLASS_HASH =
   "0x067dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d";
+/** Empirical Ready X 5.33.9 Mainnet sponsor envelope, independently observed onchain. */
+export const LOCKED_READY_SPONSOR_FORWARDER =
+  "0x0127021a1b5a52d3174c2ab077c2b043c80369250d29428cee956d76ee51584f";
+export const LOCKED_READY_SPONSOR_SELECTOR =
+  "0x03bd4b5033e788e9cc450fefa99ea20e3bed0fa358c8b280c0488f0c4647472e";
 
-const STARKNET_MAINNET_CHAIN_ID = 0x534e5f4d41494en;
-const STRK_TOKEN = 0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938dn;
 const OPEN_NOTE_PACKED_VALUE = 1n << 128n;
-const PROOF_VERSION = toBigInt(shortString.encodeShortString("PROOF0"));
 const VIRTUAL_SNOS = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS"));
 const VIRTUAL_SNOS0 = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS0"));
-const VIRTUAL_PROGRAM_HASH =
-  0x3e98c2d7703b03a7edb73ed7f075f97f1dcbaa8f717cdf6e1a57bf058265473n;
-const STARKNET_OS_CONFIG_HASH_VERSION = toBigInt(
-  shortString.encodeShortString("StarknetOsConfig3"),
-);
 
 /** The wallet API may expose its prepared call in wire or Starknet.js form. */
 export type PreparedPoolCall =
@@ -115,6 +112,119 @@ export function buildClaimActions(
   args: ExitArgs,
 ): readonly STRK20_ACTION[] {
   return buildExitActions(PrivateAction.Claim, contract, noteRecipient, args);
+}
+
+/**
+ * Rebuild a Ready-managed exit after a sentinel prepare has resolved the exact
+ * open-note ID and the role key has signed it. Ready still creates the OPEN
+ * note, while the helper calldata carries the literal signed destination.
+ * Ready's private paymaster appends and sponsors its fee action; the dApp must
+ * reconcile that outer envelope and the exact note from the mainnet receipt.
+ */
+export function buildManagedCancelRefundActions(
+  contract: FeltInput,
+  noteRecipient: FeltInput,
+  args: ExitArgs,
+): readonly STRK20_ACTION[] {
+  return buildManagedExitActions(PrivateAction.CancelRefund, contract, noteRecipient, args);
+}
+
+export function buildManagedClaimActions(
+  contract: FeltInput,
+  noteRecipient: FeltInput,
+  args: ExitArgs,
+): readonly STRK20_ACTION[] {
+  return buildManagedExitActions(PrivateAction.Claim, contract, noteRecipient, args);
+}
+
+export type ManagedReadyExitTransaction = Readonly<{
+  transactionHash: FeltInput;
+  senderAddress: FeltInput;
+  calldata: readonly FeltInput[];
+}>;
+
+export type ManagedReadyExitReceipt = Readonly<{
+  transactionHash: FeltInput;
+  finalityStatus: "ACCEPTED_ON_L1" | "ACCEPTED_ON_L2";
+  executionStatus: "SUCCEEDED" | "REVERTED";
+  poolEventCount: number;
+  afterlightEventCount: number;
+  openNoteCreatedEventCount: number;
+  poolFeeWithdrawalCount: number;
+  poolFeeCollectorTransferCount: number;
+}>;
+
+export type ManagedReadyExitEvidence = Readonly<{
+  transaction: ManagedReadyExitTransaction;
+  receipt: ManagedReadyExitReceipt;
+  readyAccounts: readonly FeltInput[];
+  contract: FeltInput;
+  kind: PrivateAction.CancelRefund | PrivateAction.Claim;
+  signedArgs: ExitArgs;
+  poolFee: FeltInput;
+  shieldedBalanceBefore: FeltInput;
+  shieldedBalanceAfter: FeltInput;
+  lockedLiabilityBefore: FeltInput;
+  lockedLiabilityAfter: FeltInput;
+}>;
+
+/**
+ * Post-receipt kill gate for a Ready-managed exact-note exit. This parses the
+ * actual outer transaction independently of the action builder, rejects a
+ * Ready account as sender, and reconciles the successful receipt plus value
+ * deltas. It is deliberately unusable as pre-sign proof: only an accepted
+ * Mainnet receipt can satisfy it.
+ */
+export function assertManagedReadyExitEvidence(input: ManagedReadyExitEvidence): void {
+  const transactionHash = felt(input.transaction.transactionHash, "managed exit transaction hash");
+  if (transactionHash === "0x0" || felt(input.receipt.transactionHash, "managed exit receipt hash") !== transactionHash) {
+    throw new Error("managed exit transaction and receipt hashes differ");
+  }
+  if (
+    input.receipt.executionStatus !== "SUCCEEDED" ||
+    (input.receipt.finalityStatus !== "ACCEPTED_ON_L1" &&
+      input.receipt.finalityStatus !== "ACCEPTED_ON_L2")
+  ) {
+    throw new Error("managed exit receipt is not accepted and succeeded");
+  }
+  if (
+    input.receipt.poolEventCount < 1 ||
+    input.receipt.afterlightEventCount !== 1 ||
+    input.receipt.openNoteCreatedEventCount !== 1 ||
+    input.receipt.poolFeeWithdrawalCount !== 1 ||
+    input.receipt.poolFeeCollectorTransferCount !== 1
+  ) {
+    throw new Error("managed exit receipt does not prove the exact pool/helper/note/fee result");
+  }
+
+  const sender = address(input.transaction.senderAddress, "managed exit outer sender");
+  if (toBigInt(sender, "managed exit outer sender") === 0n) {
+    throw new Error("managed exit outer sender is zero");
+  }
+  if (input.readyAccounts.some((candidate) => address(candidate, "Ready account") === sender)) {
+    throw new Error("managed exit exposed a Ready account as outer sender");
+  }
+
+  const poolFee = u128(input.poolFee, "managed exit pool fee");
+  const amount = u128(input.signedArgs.amount, "managed exit amount");
+  const shieldedBefore = u128(input.shieldedBalanceBefore, "managed exit shielded balance before");
+  const shieldedAfter = u128(input.shieldedBalanceAfter, "managed exit shielded balance after");
+  const lockedBefore = u128(input.lockedLiabilityBefore, "managed exit liability before");
+  const lockedAfter = u128(input.lockedLiabilityAfter, "managed exit liability after");
+  if (shieldedBefore + amount !== shieldedAfter + poolFee) {
+    throw new Error("managed exit shielded-balance delta is not reserve minus fee");
+  }
+  if (lockedBefore !== lockedAfter + amount) {
+    throw new Error("managed exit liability did not decrease by the exact reserve");
+  }
+
+  assertManagedReadyExitRelayEnvelope(
+    input.transaction.calldata,
+    input.contract,
+    input.kind,
+    input.signedArgs,
+    poolFee,
+  );
 }
 
 /** Parse the one Afterlight exit in a prepared `pool.apply_actions` call. */
@@ -467,6 +577,33 @@ function buildExitActions(
   return Object.freeze(actions);
 }
 
+function buildManagedExitActions(
+  kind: PrivateAction.CancelRefund | PrivateAction.Claim,
+  contract: FeltInput,
+  noteRecipient: FeltInput,
+  args: ExitArgs,
+): readonly STRK20_ACTION[] {
+  if (args.note_id === OPEN_NOTE_PLACEHOLDER) {
+    throw new Error("managed Ready exit requires the resolved, signed open-note ID");
+  }
+  const target = address(contract, "Afterlight contract");
+  const actions: STRK20_ACTION[] = [
+    {
+      type: "transfer",
+      token: address(args.token, "token"),
+      amount: "OPEN",
+      recipient: address(noteRecipient, "open-note recipient"),
+    },
+    {
+      type: "invoke",
+      contract: target,
+      calldata: serializeExit(kind, args),
+    },
+  ];
+  assertNoSelfWithdraw(actions, noteRecipient);
+  return Object.freeze(actions);
+}
+
 /** A live-path invariant: private exits never add NIGHTSHIFT's public self-withdraw canary. */
 export function assertNoSelfWithdraw(
   actions: readonly STRK20_ACTION[],
@@ -730,7 +867,15 @@ function assertProofOutputMatchesCall(
   }
 }
 
-/** Validate the pinned nine-felt blockifier/Cairo ProofFacts serialization. */
+/**
+ * Validate the nine-felt ProofFacts fields enforced by the canonical pool.
+ * The pool deliberately deserializes but ignores proof_version (field 0),
+ * virtual_program_hash (field 2), base_block_hash (field 5), and
+ * starknet_os_config_hash (field 6). The SNIP-36 proof verifier remains
+ * authoritative for those metadata fields. We still independently bind field
+ * 5 to the accepted Mainnet block used by the proof; field 6 must remain
+ * unpinned because the canonical pool does not define that invariant.
+ */
 function assertCanonicalProofFacts(
   prepared: PreparedCallAndProof,
   validated: ValidatedPreparedExit,
@@ -748,14 +893,6 @@ function assertCanonicalProofFacts(
     throw new Error("proof base block must identify a nonzero mainnet block");
   }
 
-  const configHash = toBigInt(
-    hash.computeHashOnElements([
-      STARKNET_OS_CONFIG_HASH_VERSION,
-      STARKNET_MAINNET_CHAIN_ID,
-      STRK_TOKEN,
-    ]),
-    "Starknet OS config hash",
-  );
   const actions = validated.normalized.calldata.slice(0, validated.actionsEnd);
   const poolClassHash = toBigInt(PINNED_STRK20_POOL_CLASS_HASH, "pinned pool class hash");
   const payload = [poolClassHash, ...actions];
@@ -766,13 +903,13 @@ function assertCanonicalProofFacts(
     ...payload,
   ]);
   const expected = [
-    PROOF_VERSION,
+    undefined,
     VIRTUAL_SNOS,
-    VIRTUAL_PROGRAM_HASH,
+    undefined,
     VIRTUAL_SNOS0,
     expectedBaseBlockNumber,
     expectedBaseBlockHash,
-    configHash,
+    undefined,
     1n,
     messageHash,
   ] as const;
@@ -802,6 +939,144 @@ function notesStorageAddress(noteId: bigint): bigint {
     "prepared note storage address",
   );
   return raw % constants.ADDR_BOUND;
+}
+
+function assertManagedReadyExitRelayEnvelope(
+  calldata: readonly FeltInput[],
+  contract: FeltInput,
+  kind: PrivateAction.CancelRefund | PrivateAction.Claim,
+  signedArgs: ExitArgs,
+  poolFee: bigint,
+): void {
+  if (signedArgs.note_id === OPEN_NOTE_PLACEHOLDER) {
+    throw new Error("managed exit evidence requires the literal signed note ID");
+  }
+  const raw = calldata.map((entry, index) =>
+    toBigInt(entry, `managed exit outer calldata[${index}]`),
+  );
+  let cursor = 0;
+  const take = (label: string): bigint => {
+    const value = raw[cursor];
+    if (value === undefined) throw new Error(`managed exit outer calldata truncated at ${label}`);
+    cursor += 1;
+    return value;
+  };
+  const takeSpan = (length: bigint, label: string): readonly bigint[] => {
+    if (length < 0n || length > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`managed exit outer calldata has invalid ${label} length`);
+    }
+    const numeric = Number(length);
+    if (cursor + numeric > raw.length) {
+      throw new Error(`managed exit outer calldata truncated at ${label}`);
+    }
+    const span = raw.slice(cursor, cursor + numeric);
+    cursor += numeric;
+    return span;
+  };
+
+  if (take("call count") !== 2n) throw new Error("managed exit sponsor must submit exactly two outer calls");
+  const feeTarget = take("fee target");
+  const feeSelector = take("fee selector");
+  const feeCalldata = takeSpan(take("fee calldata length"), "fee calldata");
+  const relayTarget = take("relay target");
+  const relaySelector = take("relay selector");
+  const relay = takeSpan(take("relay calldata length"), "relay calldata");
+  if (cursor !== raw.length) throw new Error("managed exit sponsor outer calldata has a trailing call");
+
+  const token = toBigInt(signedArgs.token, "managed exit token");
+  const lockedForwarder = toBigInt(LOCKED_READY_SPONSOR_FORWARDER, "Ready sponsor forwarder");
+  if (
+    feeTarget !== token ||
+    feeSelector !== toBigInt(hash.getSelectorFromName("transfer"), "transfer selector") ||
+    feeCalldata.length !== 3 ||
+    feeCalldata[0] !== lockedForwarder ||
+    feeCalldata[1] !== poolFee ||
+    feeCalldata[2] !== 0n ||
+    relayTarget !== lockedForwarder ||
+    relaySelector !== toBigInt(LOCKED_READY_SPONSOR_SELECTOR, "Ready sponsor selector")
+  ) {
+    throw new Error("managed exit sponsor fee or forwarder envelope differs");
+  }
+
+  if (
+    relay.length < 10 ||
+    relay[0] !== 1n ||
+    relay[1] !== toBigInt(CANONICAL_STRK20_POOL, "canonical pool") ||
+    relay[2] !== toBigInt(hash.getSelectorFromName("apply_actions"), "apply_actions selector")
+  ) {
+    throw new Error("managed exit sponsor does not forward one canonical pool call");
+  }
+  const poolLength = relay[3]!;
+  if (poolLength < 0n || poolLength > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("managed exit pool calldata length is invalid");
+  }
+  const poolEnd = 4 + Number(poolLength);
+  if (relay.length !== poolEnd + 5) throw new Error("managed exit relay trailer length differs");
+  const pool = relay.slice(4, poolEnd);
+  const trailer = relay.slice(poolEnd);
+  if (
+    trailer[0] !== token ||
+    trailer[1] !== poolFee ||
+    trailer[2] !== 0n ||
+    trailer[3] !== 1n ||
+    trailer[4] === 0n
+  ) {
+    throw new Error("managed exit relay fee trailer differs");
+  }
+
+  const parsed = parseServerInvokes(pool, "strict-none-suffix");
+  if (parsed.openNotes.length !== 1 || parsed.writeOnceActions.length !== 1 || parsed.invokes.length !== 1) {
+    throw new Error("managed exit must create one exact open note and invoke Afterlight once");
+  }
+  const openNote = parsed.openNotes[0]!;
+  const signedNoteId = felt(signedArgs.note_id, "managed exit signed note ID");
+  if (openNote.token !== address(signedArgs.token, "managed exit note token") || openNote.noteId !== signedNoteId) {
+    throw new Error("managed exit open note differs from the signed destination");
+  }
+  const writeOnce = parsed.writeOnceActions[0]!;
+  if (
+    writeOnce.storageAddress !== notesStorageAddress(toBigInt(signedNoteId, "managed exit note ID")) ||
+    writeOnce.value.length !== 2 ||
+    writeOnce.value[0] !== OPEN_NOTE_PACKED_VALUE ||
+    writeOnce.value[1] !== token
+  ) {
+    throw new Error("managed exit note storage differs from the signed destination");
+  }
+  const invoke = parsed.invokes[0]!;
+  const expectedInvoke = serializeExit(kind, signedArgs).map((entry, index) =>
+    toBigInt(entry, `managed exit expected invoke[${index}]`),
+  );
+  if (
+    invoke.target !== address(contract, "Afterlight contract") ||
+    invoke.calldata.length !== expectedInvoke.length ||
+    invoke.calldata.some((entry, index) => entry !== expectedInvoke[index])
+  ) {
+    throw new Error("managed exit Afterlight invocation differs from the signed authorization");
+  }
+
+  let feeTransferTo = 0;
+  let feeWithdrawal = 0;
+  for (const action of parsed.actions) {
+    if (action.variant === 2n || action.variant === 4n || action.variant === 6n || action.variant === 11n) {
+      throw new Error("managed exit contains a forbidden server action");
+    }
+    const fields = pool.slice(action.start + 1, action.end);
+    if (action.variant === 3n) {
+      if (fields.length !== 3 || fields[0] !== lockedForwarder || fields[1] !== token || fields[2] !== poolFee) {
+        throw new Error("managed exit contains an unexpected public transfer");
+      }
+      feeTransferTo += 1;
+    }
+    if (action.variant === 5n) {
+      if (fields.length !== 6 || fields[3] !== lockedForwarder || fields[4] !== token || fields[5] !== poolFee) {
+        throw new Error("managed exit contains an unexpected withdrawal");
+      }
+      feeWithdrawal += 1;
+    }
+  }
+  if (feeTransferTo !== 1 || feeWithdrawal !== 1) {
+    throw new Error("managed exit does not contain exactly one private fee reimbursement");
+  }
 }
 
 /** Decode enough of the current pool ServerAction ABI to locate top-level Invoke actions. */

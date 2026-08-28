@@ -7,12 +7,17 @@ import { constants, ec, hash, shortString } from "starknet";
 import {
   address,
   assertExactDappSubmittedPreparedExit,
+  assertManagedReadyExitEvidence,
   assertNoSelfWithdraw,
   bindDappSubmittedPreparedExit,
   buildCancelRefundActions,
   buildClaimActions,
   buildFundActions,
+  buildManagedCancelRefundActions,
+  buildManagedClaimActions,
   CANONICAL_STRK20_POOL,
+  LOCKED_READY_SPONSOR_FORWARDER,
+  LOCKED_READY_SPONSOR_SELECTOR,
   OPEN_NOTE_PLACEHOLDER,
   PINNED_STRK20_POOL_CLASS_HASH,
   PREPARE_SIGNATURE,
@@ -133,6 +138,143 @@ test("exit builders reject literal note IDs and explicit self-withdraws", () => 
   assert.throws(() => assertNoSelfWithdraw(unsafe, account), /self-withdraw is forbidden/);
 });
 
+test("managed Ready exits retain the exact signed note while Ready creates the OPEN note", () => {
+  const resolved = { ...exit, note_id: "0x777" };
+  for (const [kind, actions] of [
+    [PrivateAction.CancelRefund, buildManagedCancelRefundActions(contract, account, resolved)],
+    [PrivateAction.Claim, buildManagedClaimActions(contract, account, resolved)],
+  ] as const) {
+    assert.deepEqual(actions[0], {
+      type: "transfer",
+      token: address(token),
+      amount: "OPEN",
+      recipient: address(account),
+    });
+    assert.equal(actions[1]!.type, "invoke");
+    if (actions[1]!.type === "invoke") {
+      assert.equal(actions[1]!.calldata[0], `0x${kind.toString(16)}`);
+      assert.equal(actions[1]!.calldata[7], "0x777");
+    }
+    assert.equal(actions.some((action) => action.type === "withdraw"), false);
+  }
+});
+
+test("managed Ready exits reject an unresolved destination", () => {
+  assert.throws(
+    () => buildManagedClaimActions(contract, account, exit),
+    /requires the resolved, signed open-note ID/,
+  );
+});
+
+function managedExitEvidence(overrides: Readonly<Record<string, unknown>> = {}) {
+  const signedArgs = { ...exit, note_id: "0x777" };
+  const invokeCalldata = serializeExit(PrivateAction.Claim, signedArgs);
+  const fee = 6n * 10n ** 18n;
+  const serverActions = [
+    ["0x0", noteStorageAddress("0x777"), "0x2", hex(openNotePackedValue), address(token)],
+    ["0x7", "0xa11d", "0xe11e", "0xec11", address(token), "0x777"],
+    ["0xa", address(contract), "0xb", ...invokeCalldata],
+    ["0x3", LOCKED_READY_SPONSOR_FORWARDER, address(token), hex(fee)],
+    ["0x5", "0x111", "0x222", "0x333", LOCKED_READY_SPONSOR_FORWARDER, address(token), hex(fee)],
+  ];
+  const poolCalldata = [hex(BigInt(serverActions.length)), ...serverActions.flat(), "0x1"];
+  const relayCalldata = [
+    "0x1",
+    address(pool),
+    hash.getSelectorFromName("apply_actions"),
+    hex(BigInt(poolCalldata.length)),
+    ...poolCalldata,
+    address(token),
+    hex(fee),
+    "0x0",
+    "0x1",
+    "0x1234",
+  ];
+  const transaction = {
+    transactionHash: "0xabc",
+    senderAddress: "0x7777",
+    calldata: [
+      "0x2",
+      address(token),
+      hash.getSelectorFromName("transfer"),
+      "0x3",
+      LOCKED_READY_SPONSOR_FORWARDER,
+      hex(fee),
+      "0x0",
+      LOCKED_READY_SPONSOR_FORWARDER,
+      LOCKED_READY_SPONSOR_SELECTOR,
+      hex(BigInt(relayCalldata.length)),
+      ...relayCalldata,
+    ],
+  };
+  return {
+    transaction,
+    receipt: {
+      transactionHash: "0xabc",
+      finalityStatus: "ACCEPTED_ON_L2",
+      executionStatus: "SUCCEEDED",
+      poolEventCount: 7,
+      afterlightEventCount: 1,
+      openNoteCreatedEventCount: 1,
+      poolFeeWithdrawalCount: 1,
+      poolFeeCollectorTransferCount: 1,
+    },
+    readyAccounts: [account, "0x8888"],
+    contract,
+    kind: PrivateAction.Claim,
+    signedArgs,
+    poolFee: fee,
+    shieldedBalanceBefore: 12n * 10n ** 18n,
+    shieldedBalanceAfter: 16n * 10n ** 18n,
+    lockedLiabilityBefore: 20n * 10n ** 18n,
+    lockedLiabilityAfter: 10n * 10n ** 18n,
+    ...overrides,
+  } as Parameters<typeof assertManagedReadyExitEvidence>[0];
+}
+
+test("managed Ready exit evidence binds sender, sponsor, exact note, receipt, and deltas", () => {
+  const exact = managedExitEvidence();
+  assert.doesNotThrow(() => assertManagedReadyExitEvidence(exact));
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({
+      transaction: { ...exact.transaction, senderAddress: account },
+    })),
+    /exposed a Ready account/,
+  );
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({
+      receipt: { ...exact.receipt, executionStatus: "REVERTED" },
+    })),
+    /not accepted and succeeded/,
+  );
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({ shieldedBalanceAfter: 15n * 10n ** 18n })),
+    /shielded-balance delta/,
+  );
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({ lockedLiabilityAfter: 11n * 10n ** 18n })),
+    /liability/,
+  );
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({
+      signedArgs: { ...exact.signedArgs, note_id: "0x778" },
+    })),
+    /open note differs from the signed destination/,
+  );
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({ contract: "0x4321" })),
+    /Afterlight invocation differs/,
+  );
+  const changedEnvelope = [...exact.transaction.calldata];
+  changedEnvelope[5] = "0x1";
+  assert.throws(
+    () => assertManagedReadyExitEvidence(managedExitEvidence({
+      transaction: { ...exact.transaction, calldata: changedEnvelope },
+    })),
+    /sponsor fee or forwarder/,
+  );
+});
+
 function hex(value: bigint): string {
   return `0x${value.toString(16)}`;
 }
@@ -156,7 +298,7 @@ function canonicalProofFacts(serverActions: readonly string[], classHash: string
     ...payload,
   ]);
   return [
-    shortString.encodeShortString("PROOF0"),
+    shortString.encodeShortString("PROOF1"),
     shortString.encodeShortString("VIRTUAL_SNOS"),
     hex(virtualProgramHash),
     shortString.encodeShortString("VIRTUAL_SNOS0"),
@@ -471,6 +613,12 @@ test("final proof pins the pool class and canonical ProofFacts message", () => {
   const wrongMessage = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
   wrongMessage.proof.proof_facts[8] = "0x123";
   assert.throws(() => validate(wrongMessage), /proof facts differ at field\[8\]/);
+
+  const verifierUpgradeMetadata = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef");
+  verifierUpgradeMetadata.proof.proof_facts[0] = "0x50524f4f4631";
+  verifierUpgradeMetadata.proof.proof_facts[2] = "0x123456";
+  verifierUpgradeMetadata.proof.proof_facts[6] = "0x654321";
+  assert.equal(validate(verifierUpgradeMetadata).noteId, "0xdeadbeef");
 });
 
 test("dApp-submitted route binds the signed note to the exact PrepareInvoke response", () => {

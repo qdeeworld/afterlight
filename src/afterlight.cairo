@@ -8,7 +8,6 @@ pub trait IAfterlight<T> {
     fn heartbeat(ref self: T, auth: ControlArgs);
     fn request_recovery(ref self: T, auth: ControlArgs);
     fn veto(ref self: T, auth: ControlArgs);
-    fn recover_surplus(ref self: T, recipient: ContractAddress, amount: u256);
     fn get_vault(self: @T, vault_id: felt252) -> Vault;
     fn get_locked_by_token(self: @T, token: ContractAddress) -> u256;
     fn get_config(self: @T) -> Config;
@@ -17,7 +16,6 @@ pub trait IAfterlight<T> {
 pub mod errors {
     pub const INVALID_CONFIG: felt252 = 'AL_INVALID_CONFIG';
     pub const NOT_POOL: felt252 = 'AL_NOT_POOL';
-    pub const NOT_ADMIN: felt252 = 'AL_NOT_ADMIN';
     pub const ZERO_VAULT: felt252 = 'AL_ZERO_VAULT';
     pub const VAULT_EXISTS: felt252 = 'AL_VAULT_EXISTS';
     pub const VAULT_NOT_FOUND: felt252 = 'AL_VAULT_NOT_FOUND';
@@ -44,8 +42,6 @@ pub mod errors {
     pub const LIABILITY_UNDERFLOW: felt252 = 'AL_LIABILITY_UNDERFLOW';
     pub const APPROVE_FAILED: felt252 = 'AL_APPROVE_FAILED';
     pub const TRANSFER_FAILED: felt252 = 'AL_TRANSFER_FAILED';
-    pub const ZERO_RECIPIENT: felt252 = 'AL_ZERO_RECIPIENT';
-    pub const INSUFFICIENT_SURPLUS: felt252 = 'AL_INSUFFICIENT_SURPLUS';
 }
 
 #[starknet::contract]
@@ -71,7 +67,6 @@ pub mod Afterlight {
     trait IERC20<T> {
         fn balance_of(self: @T, account: ContractAddress) -> u256;
         fn approve(ref self: T, spender: ContractAddress, amount: u256) -> bool;
-        fn transfer(ref self: T, recipient: ContractAddress, amount: u256) -> bool;
     }
 
     /// Vault fields use separate maps deliberately. Hot transitions read and
@@ -81,7 +76,6 @@ pub mod Afterlight {
     struct Storage {
         pool: ContractAddress,
         token: ContractAddress,
-        surplus_admin: ContractAddress,
         fixed_amount: u128,
         normal_min_inactivity: u64,
         normal_min_grace: u64,
@@ -117,7 +111,6 @@ pub mod Afterlight {
         RecoveryVetoed: RecoveryVetoed,
         VaultCancelled: VaultCancelled,
         RecoveryClaimed: RecoveryClaimed,
-        SurplusRecovered: SurplusRecovered,
         FundingCheckpointSynced: FundingCheckpointSynced,
     }
 
@@ -179,12 +172,6 @@ pub mod Afterlight {
     }
 
     #[derive(Drop, PartialEq, starknet::Event)]
-    pub struct SurplusRecovered {
-        pub recipient: ContractAddress,
-        pub amount: u256,
-    }
-
-    #[derive(Drop, PartialEq, starknet::Event)]
     pub struct FundingCheckpointSynced {
         pub balance: u256,
         pub synced_at: u64,
@@ -195,7 +182,6 @@ pub mod Afterlight {
         ref self: ContractState,
         pool: ContractAddress,
         token: ContractAddress,
-        surplus_admin: ContractAddress,
         fixed_amount: u128,
         normal_min_inactivity: u64,
         normal_min_grace: u64,
@@ -207,7 +193,6 @@ pub mod Afterlight {
     ) {
         assert(pool.is_non_zero(), errors::INVALID_CONFIG);
         assert(token.is_non_zero(), errors::INVALID_CONFIG);
-        assert(surplus_admin.is_non_zero(), errors::INVALID_CONFIG);
         assert(fixed_amount > 0, errors::INVALID_CONFIG);
         assert(normal_min_inactivity > 0, errors::INVALID_CONFIG);
         assert(normal_min_grace > 0, errors::INVALID_CONFIG);
@@ -224,7 +209,6 @@ pub mod Afterlight {
         );
         self.pool.write(pool);
         self.token.write(token);
-        self.surplus_admin.write(surplus_admin);
         self.fixed_amount.write(fixed_amount);
         self.normal_min_inactivity.write(normal_min_inactivity);
         self.normal_min_grace.write(normal_min_grace);
@@ -341,18 +325,6 @@ pub mod Afterlight {
                 );
         }
 
-        fn recover_surplus(ref self: ContractState, recipient: ContractAddress, amount: u256) {
-            assert(get_caller_address() == self.surplus_admin.read(), errors::NOT_ADMIN);
-            assert(recipient.is_non_zero(), errors::ZERO_RECIPIENT);
-            let token = self.token.read();
-            let erc20 = IERC20Dispatcher { contract_address: token };
-            let held = erc20.balance_of(get_contract_address());
-            let locked = self.locked.read();
-            assert(held >= locked + amount, errors::INSUFFICIENT_SURPLUS);
-            assert(erc20.transfer(recipient, amount), errors::TRANSFER_FAILED);
-            self.emit(SurplusRecovered { recipient, amount });
-        }
-
         fn get_vault(self: @ContractState, vault_id: felt252) -> Vault {
             let state = self.state.entry(vault_id).read();
             Vault {
@@ -386,7 +358,6 @@ pub mod Afterlight {
             Config {
                 pool: self.pool.read(),
                 token: self.token.read(),
-                surplus_admin: self.surplus_admin.read(),
                 fixed_amount: self.fixed_amount.read(),
                 normal_min_inactivity: self.normal_min_inactivity.read(),
                 normal_min_grace: self.normal_min_grace.read(),

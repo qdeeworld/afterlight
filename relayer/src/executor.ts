@@ -1,4 +1,5 @@
 import type {
+  ActiveBudgetLookupResult,
   BudgetMutationResult,
   BudgetReserveInput,
   BudgetReserveResult,
@@ -67,6 +68,7 @@ export interface StarknetRelayAdapter {
 
 export interface BudgetCoordinator {
   lookup(semanticKey: string): Promise<BudgetLookupResult>;
+  findActiveByFingerprint?(exactFingerprint: string): Promise<ActiveBudgetLookupResult>;
   reserve(input: BudgetReserveInput): Promise<BudgetReserveResult>;
   markSubmitted(
     semanticKey: string,
@@ -163,6 +165,23 @@ export async function executeRelayPlan(
     return duplicateResult(prior.state, prior.transactionHash);
   }
   if (prior.sponsorshipFrozen) throw new ExecutorError("sponsorship_frozen");
+
+  // A Worker request can end after broadcast but before receipt reconciliation.
+  // Recover the one serialized SUBMITTED exposure by its stable exact call
+  // fingerprint before reserving a new time-bucket semantic key.
+  const active = await budget.findActiveByFingerprint?.(plan.fingerprint);
+  if (active?.outcome === "found") {
+    if (active.state === "submitted" && active.transactionHash !== null) {
+      return reconcileSubmitted(
+        active.transactionHash,
+        Object.freeze({ ...plan, semanticKey: active.semanticKey }),
+        adapter,
+        budget,
+        nowMs,
+      );
+    }
+    return duplicateResult(active.state, active.transactionHash);
+  }
 
   const simulation = await adapter.simulateExact(plan);
   if (!simulation.ok) throw new ExecutorError("simulation_failed");

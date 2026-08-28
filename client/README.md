@@ -33,6 +33,13 @@ only to the alternative route where a dApp/paymaster submits the exact
 Ready `wallet_strk20InvokeTransaction`, which accepts actions and generates a
 separate fee-bearing proof.
 
+`assertManagedReadyExitEvidence` is the independent post-receipt gate for that
+normal Ready route. It parses the actual outer transaction, rejects either
+Ready role account as sender, locks the observed Ready sponsor
+forwarder/selector, exact pool call, signed note and Afterlight calldata, and
+then requires a succeeded receipt plus exact reserve-minus-fee shielded-balance
+and liability deltas. A prepared action or wallet review cannot satisfy it.
+
 The mainnet quote tool is simulation-only. It has no signing or submission
 method. Build the selected Scarb profile first, then set a deployed public
 account as the intended deployer to derive its exact UDC address:
@@ -45,9 +52,9 @@ AFTERLIGHT_SIMULATION_SENDER=0x... \
 npm run quote:mainnet
 ```
 
-`AFTERLIGHT_SURPLUS_ADMIN` defaults to that same public address and may be set
-separately. The tool prints the full constructor calldata so the eventual
-wallet review can be reconciled field-for-field.
+The tool prints the full constructor calldata so the eventual wallet review can
+be reconciled field-for-field. The contract has no surplus administrator or
+administrative withdrawal path.
 
 ## Local mainnet operator
 
@@ -56,7 +63,7 @@ deployment operator. It does not auto-sign or auto-submit. Before enabling its
 two wallet-impacting buttons it recomputes the Sierra and CASM hashes, derives
 the exact UDC address, verifies Mainnet, checks the intended deployer, and reads
 whether the class and contract already exist. Once deployed, the same read-only
-refresh fails closed unless Mainnet returns the locked class hash and all eleven
+refresh fails closed unless Mainnet returns the locked class hash and all ten
 constructor-derived configuration fields exactly.
 
 Copy `tools/mainnet-operator-config.example.json` to the ignored

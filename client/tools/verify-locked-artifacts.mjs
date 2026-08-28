@@ -7,11 +7,11 @@ import { hash } from "starknet";
 const profile = "spike-inline-56";
 const expected = {
   classHash:
-    "0x066654717cccb9875687a1abc8defe640f08f709c01715ea828f14c1ec5c7f25",
+    "0x05da9866f62cc6dd1e380e8d9206e78a752b460abdb802070e0be1208ec7b1a6",
   compiledClassHash:
-    "0x05a3c0719b75e0c4655f707f95c7930b1b72291261138337b5b5ca0f3019e3b7",
-  sierraWords: 6107,
-  casmWords: 13437,
+    "0x055ba10e36aac8e21b3437f1413f009f6b17d3633c307941a4412ce73566251",
+  sierraWords: 5767,
+  casmWords: 12725,
 };
 
 const clientDirectory = path.dirname(path.dirname(fileURLToPath(import.meta.url)));

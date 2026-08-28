@@ -271,7 +271,7 @@ export function requireRelayHeaders(request: Request, env: Env): void {
   }
 }
 
-export function requireCheckpointHeaders(request: Request, env: Env): void {
+export async function requireCheckpointHeaders(request: Request, env: Env): Promise<void> {
   if (request.headers.get("origin") !== env.ALLOWED_ORIGIN) {
     throw new RelayHttpError(403, "origin_not_allowed");
   }
@@ -279,8 +279,22 @@ export function requireCheckpointHeaders(request: Request, env: Env): void {
     throw new RelayHttpError(400, "intent_header_required");
   }
   const contentLength = request.headers.get("content-length");
-  if (request.body !== null || (contentLength !== null && contentLength !== "0")) {
+  if (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || contentLength !== "0")) {
     throw new RelayHttpError(400, "checkpoint_payload_forbidden");
+  }
+  if (request.body === null) return;
+  const reader = request.body.getReader();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      if (value.byteLength > 0) {
+        await reader.cancel("checkpoint payload forbidden");
+        throw new RelayHttpError(400, "checkpoint_payload_forbidden");
+      }
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
 

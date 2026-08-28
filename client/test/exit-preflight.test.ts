@@ -113,7 +113,7 @@ function canonicalProofFacts(serverActions: readonly string[], classHash: string
     ...payload,
   ]);
   return [
-    shortString.encodeShortString("PROOF0"),
+    shortString.encodeShortString("PROOF1"),
     shortString.encodeShortString("VIRTUAL_SNOS"),
     hex(virtualProgramHash),
     shortString.encodeShortString("VIRTUAL_SNOS0"),

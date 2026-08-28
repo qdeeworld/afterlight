@@ -67,6 +67,31 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(body.plan.maxSponsoredFeeFri).toBe("200000000000000000");
   });
 
+  it("supports a bounded estimate-only relay route without signing or budget mutation", async () => {
+    const payload = validPayload(RelayOperation.Request, 1n);
+    const response = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/relay?mode=estimate", {
+        method: "POST",
+        headers: relayHeaders(),
+        body: payload,
+      }),
+    );
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: "error", code: "executor_unavailable" });
+  });
+
+  it("rejects unknown relay query parameters", async () => {
+    const response = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/relay?mode=estimate&broadcast=true", {
+        method: "POST",
+        headers: relayHeaders(),
+        body: validPayload(RelayOperation.Request, 1n),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ status: "error", code: "invalid_query" });
+  });
+
   it("builds a payload-free neutral funding checkpoint without wallet or vault material", async () => {
     const response = await exports.default.fetch(
       new Request("https://relay.invalid/v1/checkpoint", {
@@ -92,6 +117,21 @@ describe("Afterlight Phase A relay Worker", () => {
       calldata: [],
     });
     expect(JSON.stringify(body)).not.toMatch(/wallet|vault|signature|ready/i);
+  });
+
+  it("accepts a zero-byte streamed checkpoint body emitted by real HTTP clients", async () => {
+    const response = await exports.default.fetch(
+      new Request("https://relay.invalid/v1/checkpoint", {
+        method: "POST",
+        headers: {
+          origin,
+          "content-length": "0",
+          "x-afterlight-intent": "funding-checkpoint",
+        },
+        body: "",
+      }),
+    );
+    expect(response.status).toBe(202);
   });
 
   it("rejects checkpoint payloads and the control intent on the checkpoint route", async () => {

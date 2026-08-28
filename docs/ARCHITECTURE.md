@@ -8,7 +8,7 @@ Afterlight separates private value movement, application authorization, and tran
 |---|---|---|
 | Ready X and STRK20 | Shielded balances, private invocation, proof preparation, and exact open-note settlement | Owner or successor application secrets outside the user's device |
 | Afterlight Cairo contract | Vault state, signed authorization, liabilities, timing, exact-note binding, and terminal settlement | Ready wallet identity assumptions |
-| Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, and E1 proof-envelope/call binding | Relayer account key |
+| Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, proof-envelope/call binding, and independent managed-exit receipt reconciliation | Relayer account key |
 | Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, and checkpoint transactions from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
 
 ## Action routing
@@ -16,6 +16,15 @@ Afterlight separates private value movement, application authorization, and tran
 `FUND`, `CANCEL_REFUND`, and `CLAIM` enter through the canonical STRK20 pool and the contract's `privacy_invoke` entrypoint. The contract rejects any other caller.
 
 `HEARTBEAT`, `REQUEST`, and `VETO` are public state transitions authorized by per-vault Stark signatures. Any submitter may relay a valid authorization; the submitter is never the authority.
+
+Ready-managed private exits retain the literal role-signed destination note in
+the helper invocation while Ready creates the corresponding OPEN note and pays
+its fee through the observed private sponsor envelope. After inclusion, the
+client independently parses the actual outer transaction and rejects a Ready
+role address as sender, sponsor-envelope drift, extra public transfers, a
+different note or helper call, a failed receipt, or incorrect shielded-balance
+and liability deltas. This is a post-receipt check; it does not turn preparation
+into execution evidence.
 
 ```text
 Ready X + STRK20 pool
@@ -63,19 +72,15 @@ held token balance >= existing locked liabilities + new fixed reserve
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
 
-The constructor assigns a public `surplus_admin`. That address may transfer only
-the amount strictly above total locked liabilities; it cannot use the surplus
-path to withdraw a vault reserve, change a vault, or change protocol
-configuration. This is nevertheless an administrative trust boundary: the
-admin chooses the public recipient of unaccounted donations, and an accidental
-donor has no protocol-level right to reclaim them. A compromised admin can take
-available surplus, while the contract's liability check is the control that
-protects accounted user reserves.
+There is no administrative withdrawal path. Accidental donations remain
+unaccounted surplus: they cannot create a vault claim, block a user action, or
+change the exact locked liability. Donors should not expect protocol-level
+recovery of tokens sent directly to the helper.
 
 ## Vault modes
 
-`NORMAL` enforces production-oriented inactivity and grace bounds. `FAST_DEMO` permits short intervals while preserving the same signatures, accounting, caller restrictions, exact-note binding, and replay protection. The mode is immutable per vault and caps the principal at 10 STRK.
+`NORMAL` enforces production-oriented inactivity and grace bounds. `FAST_DEMO` permits short intervals while preserving the same signatures, accounting, caller restrictions, exact-note binding, and replay protection. The mode is immutable per vault and caps the principal at 10 STRK. The lean mainnet release fixes the reserve at 1 STRK; changing the denomination requires a different deployment address and an explicit release review.
 
 ## Current release boundary
 
-The repository currently proves the design through deterministic local tests. Contract addresses and mainnet transaction evidence will be published only after a complete live lifecycle succeeds; until then they are intentionally absent.
+The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two vaults completed the cancellation and recovery branches, and all four STRK20 receipts are listed in `strk20.json`. The public product UI remains outside this release, and E2 promotion still requires Ready X to expose the successor's post-claim shielded balance after finality.

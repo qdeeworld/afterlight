@@ -92,7 +92,6 @@ pub struct Vault {
 pub struct Config {
     pub pool: ContractAddress,
     pub token: ContractAddress,
-    pub surplus_admin: ContractAddress,
     pub fixed_amount: u128,
     pub normal_min_inactivity: u64,
     pub normal_min_grace: u64,

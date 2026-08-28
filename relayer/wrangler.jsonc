@@ -5,25 +5,22 @@
   "compatibility_date": "2026-08-24",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    // Local-only Phase A values. Replace the contract and origin after promotion.
-    "DEPLOYMENT_STAGE": "phase-a-local",
-    "ALLOWED_ORIGIN": "https://afterlight.invalid",
-    "AFTERLIGHT_CONTRACT": "0x1234",
+    "DEPLOYMENT_STAGE": "phase-b-live-spike",
+    "ALLOWED_ORIGIN": "http://127.0.0.1:43117",
+    "AFTERLIGHT_CONTRACT": "0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25",
     "STARKNET_CHAIN_ID": "0x534e5f4d41494e",
     "STRK_TOKEN": "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d",
-    "RESERVE_AMOUNT_FRI": "10000000000000000000",
+    "RESERVE_AMOUNT_FRI": "1000000000000000000",
     "MAX_RELAY_TTL_SECONDS": "900",
     "MAX_RELAY_PAYLOAD_BYTES": "2048",
     "MAX_SPONSORED_FEE_FRI": "200000000000000000",
     "DAILY_SPONSOR_BUDGET_FRI": "1200000000000000000",
     "SPONSOR_FEE_MARGIN_BPS": "11000",
     "MIN_RELAYER_BALANCE_FRI": "1000000000000000000",
-    // Deliberately inert placeholders. A promoted deployment must replace every one.
-    "DEPLOYMENT_ID": "phase-a-local",
-    "RELAYER_ACCOUNT_ADDRESS": "0x0",
+    "DEPLOYMENT_ID": "afterlight-mainnet-spike-20260827-v2",
+    "RELAYER_ACCOUNT_ADDRESS": "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46",
     "RELAYER_ACCOUNT_CAIRO_VERSION": "1",
-    "STARKNET_RPC_URL": "https://rpc.invalid",
-    // The signer path remains unreachable under these inert values and must fail closed.
+    "STARKNET_RPC_URL": "https://api.cartridge.gg/x/starknet/mainnet/rpc/v0_10",
     "SUBMIT_ENABLED": "false"
   },
   // Names only: values must be installed with `wrangler secret put` after promotion.

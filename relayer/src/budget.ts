@@ -62,6 +62,16 @@ export type BudgetLookupResult = Readonly<
     }
 >;
 
+export type ActiveBudgetLookupResult = Readonly<
+  | { outcome: "missing" }
+  | {
+      outcome: "found";
+      semanticKey: string;
+      state: "reserved" | "submitted";
+      transactionHash: string | null;
+    }
+>;
+
 export type BudgetSnapshot = Readonly<{
   dayKey: string;
   reservedTodayFri: string;
@@ -161,6 +171,28 @@ export class RelayBudget extends DurableObject<Env> {
       maxFeeFri: row.max_fee_fri,
       actualFeeFri: row.actual_fee_fri,
       sponsorshipFrozen: frozen,
+    };
+  }
+
+  findActiveByFingerprint(exactFingerprint: string): ActiveBudgetLookupResult {
+    const exact = validKey(exactFingerprint);
+    const rows = this.ctx.storage.sql
+      .exec<ReservationRow>(
+        `SELECT semantic_key, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
+                status, transaction_hash
+         FROM reservations
+         WHERE exact_fingerprint = ? AND status IN ('RESERVED', 'SUBMITTED')`,
+        exact,
+      )
+      .toArray();
+    if (rows.length === 0) return { outcome: "missing" };
+    if (rows.length !== 1) throw new BudgetError("idempotency_conflict");
+    const row = rows[0]!;
+    return {
+      outcome: "found",
+      semanticKey: row.semantic_key,
+      state: row.status === "SUBMITTED" ? "submitted" : "reserved",
+      transactionHash: row.transaction_hash,
     };
   }
 

@@ -53,12 +53,17 @@ export default {
       }
 
       let plan: RelayPlan;
+      let estimateOnly = false;
       if (url.pathname === CHECKPOINT_PATH) {
-        requireCheckpointHeaders(request, env);
+        await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
         plan = await prepareCheckpointPlan(env, Date.now());
       } else {
         requireRelayHeaders(request, env);
+        estimateOnly = url.searchParams.get("mode") === "estimate";
+        if (url.searchParams.size !== (estimateOnly ? 1 : 0)) {
+          throw new RelayHttpError(400, "invalid_query");
+        }
         const bodyLimit = Number(
           parsePositiveDecimal(env.MAX_RELAY_PAYLOAD_BYTES, "payload_limit", 2_048n),
         );
@@ -70,6 +75,27 @@ export default {
         );
         plan = prepared.plan;
         await rateLimitRelay(prepared.request, env);
+      }
+
+      if (estimateOnly) {
+        const readiness = executorReadiness(env);
+        if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
+        const simulation = await createStarknetRelayAdapter(env).simulateExact(plan);
+        if (!simulation.ok) throw new RelayHttpError(422, "estimate_rejected");
+        return jsonResponse(
+          {
+            status: "estimated",
+            submission: "not_attempted",
+            plan: {
+              fingerprint: plan.fingerprint,
+              semanticKey: plan.semanticKey,
+              call: plan.call,
+            },
+            estimate: simulation,
+          },
+          200,
+          corsHeaders(env.ALLOWED_ORIGIN),
+        );
       }
 
       if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
@@ -108,11 +134,12 @@ export default {
         corsHeaders(env.ALLOWED_ORIGIN),
       );
     } catch (error) {
+      const executorCode = executorErrorCode(error);
       const handled =
         error instanceof RelayHttpError
           ? error
-          : error instanceof ExecutorError
-            ? new RelayHttpError(error.code === "relayer_busy" ? 503 : 502, error.code)
+          : executorCode !== undefined
+            ? new RelayHttpError(executorCode === "relayer_busy" ? 503 : 502, executorCode)
           : new RelayHttpError(500, "internal_error");
       // Never log payloads, signatures, IPs, vault IDs, wallet addresses, or request headers.
       console.error(
@@ -133,6 +160,22 @@ export default {
     }
   },
 } satisfies ExportedHandler<Env>;
+
+function executorErrorCode(error: unknown): ExecutorError["code"] | undefined {
+  if (error instanceof ExecutorError) return error.code;
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  const allowed: readonly ExecutorError["code"][] = [
+    "submission_disabled", "simulation_failed", "simulation_mismatch",
+    "fee_policy_rejected", "sponsorship_frozen", "sponsorship_invariant_breach",
+    "submission_not_started", "submission_uncertain", "submission_mismatch",
+    "receipt_unreconciled", "receipt_reverted", "signer_adapter_unavailable",
+    "executor_config_incomplete", "relayer_busy",
+  ];
+  return typeof code === "string" && allowed.includes(code as ExecutorError["code"])
+    ? code as ExecutorError["code"]
+    : undefined;
+}
 
 async function health(env: Env): Promise<Response> {
   const submitDisabled = !isSubmissionEnabled(env.SUBMIT_ENABLED);

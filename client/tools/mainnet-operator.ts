@@ -80,6 +80,7 @@ let contractDeployed = false;
 let deploymentVerification: VerifiedDeploymentState | undefined;
 
 function normalized(value: string): string {
+  if (value.trim().toUpperCase() === "SN_MAIN") return MAINNET.toLowerCase();
   return num.toHex(BigInt(value)).toLowerCase();
 }
 
@@ -118,8 +119,8 @@ async function loadReviewPackage(): Promise<void> {
   if (normalized(loadedConfig.chainId) !== normalized(MAINNET)) {
     throw new Error("The operator configuration is not for Starknet Mainnet.");
   }
-  if (loadedConfig.constructorCalldata.length !== 11) {
-    throw new Error("Expected exactly eleven Afterlight constructor fields.");
+  if (loadedConfig.constructorCalldata.length !== 10) {
+    throw new Error("Expected exactly ten Afterlight constructor fields.");
   }
 
   const [loadedSierra, loadedCasm] = await Promise.all([
@@ -164,7 +165,7 @@ async function loadReviewPackage(): Promise<void> {
       constructorCalldata: loadedConfig.constructorCalldata,
       quotedDeclarationStrk: loadedConfig.quotedDeclarationStrk,
       quotedDeploymentStrk: loadedConfig.quotedDeploymentStrk,
-      declarationTransport: "ready_injected_v5_enable_then_explicit_class_hash",
+      declarationTransport: "ready_injected_v5_exact_sn_main_bigint_adapter",
       signed: false,
       submitted: false,
     },
@@ -252,18 +253,31 @@ async function requestDeclarationReview(): Promise<void> {
   if (!sierra) throw new Error("The verified Sierra artifact is unavailable.");
   await refreshNetworkState();
   if (classDeclared) throw new Error("The locked Afterlight class is already declared.");
-  // Ready 5.33.9's standard wallet_addDeclareTransaction path drops class_hash
-  // and hashes an already-stringified ABI. Initialize its injected v5 account
-  // explicitly so the locked class hash reaches the review and transaction.
+  // Ready 5.33.9's standard handler serializes the Sierra class before its
+  // internal action and cannot complete fee estimation. Its legacy v5 route
+  // preserves the exact class and hashes, but initializes Starknet.js with the
+  // textual chain ID `SN_MAIN`, which that bundled version passes to BigInt.
+  // Adapt only that exact equivalent value during initialization, then restore
+  // the native global before any wallet review or transaction signing.
   const legacy = window.starknet_argentX;
   if (!legacy) throw new Error("Ready X did not expose its injected declaration provider.");
-  const [enabledAddress] = await legacy.enable({ starknetVersion: "v5" });
+  const nativeBigInt = window.BigInt;
+  const compatibleBigInt = ((value: string | number | bigint | boolean) =>
+    nativeBigInt(typeof value === "string" && value.trim().toUpperCase() === "SN_MAIN" ? locked.chainId : value)) as BigIntConstructor;
+  compatibleBigInt.asIntN = nativeBigInt.asIntN;
+  compatibleBigInt.asUintN = nativeBigInt.asUintN;
+  let enabledAddress: string | undefined;
+  try {
+    window.BigInt = compatibleBigInt;
+    [enabledAddress] = await legacy.enable({ starknetVersion: "v5" });
+  } finally {
+    window.BigInt = nativeBigInt;
+  }
   if (!enabledAddress || normalized(enabledAddress) !== normalized(locked.intendedDeployer)) {
     throw new Error("Ready X initialized the wrong injected declaration account.");
   }
-  if (!legacy.account) throw new Error("Ready X did not initialize its declaration account.");
-  if (normalized(legacy.account.address) !== normalized(locked.intendedDeployer)) {
-    throw new Error("Ready X's injected declaration account is not the locked deployer.");
+  if (!legacy.account || normalized(legacy.account.address) !== normalized(locked.intendedDeployer)) {
+    throw new Error("Ready X did not initialize the locked declaration account.");
   }
   if (legacy.chainId && normalized(legacy.chainId) !== normalized(locked.chainId)) {
     throw new Error("Ready X's injected declaration account is not on Starknet Mainnet.");
@@ -271,6 +285,9 @@ async function requestDeclarationReview(): Promise<void> {
   const result = await legacy.account.declare(
     buildReadyLegacyDeclarationPayload(sierra, locked.classHash, locked.compiledClassHash),
   );
+  if (normalized(result.class_hash) !== normalized(locked.classHash)) {
+    throw new Error(`Ready returned an unexpected declared class hash: ${result.class_hash}`);
+  }
   output.textContent = JSON.stringify(
     {
       operation: "declaration_submitted_by_ready",

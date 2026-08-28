@@ -2,10 +2,11 @@
 
 ## Evidence and release status
 
-This is the intended Ready X flow for the **E1, pre-deployment** Afterlight
-implementation. It documents prerequisites and the user boundary; it is not a
-live-product runbook and is not an instruction to fund or sign today. There is
-no deployed Afterlight contract, public product UI, or E2 mainnet lifecycle yet.
+This is the Ready X flow exercised by the deployed Afterlight Mainnet mechanism.
+It documents prerequisites and the user boundary; it is not yet a public-product
+runbook or a standing instruction to fund or sign. The contract and a complete
+founder-operated lifecycle exist, while the public UI and unrelated-user E3/E4
+completion remain pending.
 
 ## Accounts and STRK20 prerequisites
 

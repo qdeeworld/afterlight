@@ -23,6 +23,10 @@ const allowedProfiles = new Set([
   "spike-inline-4",
   "spike-inline-8",
   "spike-inline-12",
+  "spike-inline-32",
+  "spike-inline-40",
+  "spike-inline-48",
+  "spike-inline-52",
   "spike-inline-56",
 ]);
 if (!allowedProfiles.has(compilerProfile)) {
@@ -82,11 +86,13 @@ const pool =
   "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
 const strk =
   "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
+const fixedAmount = BigInt(
+  process.env.AFTERLIGHT_FIXED_AMOUNT_FRI ?? "1000000000000000000",
+);
 const constructorCalldata = [
   pool,
   strk,
-  process.env.AFTERLIGHT_SURPLUS_ADMIN ?? simulationSender,
-  10_000_000_000_000_000_000n,
+  fixedAmount,
   2_592_000n,
   604_800n,
   300n,

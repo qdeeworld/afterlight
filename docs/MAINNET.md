@@ -2,10 +2,11 @@
 
 ## Current evidence level
 
-Afterlight is **E1 and pre-deployment**. The entries below separate locked local
-artifacts and public dependencies from evidence that does not exist yet. Empty
-transaction slots are intentional; they must not be replaced by simulated,
-prepared, reverted, or unrelated pool transactions.
+Afterlight has a complete deployed Mainnet mechanism and four validator-qualified
+STRK20 receipts. It remains classified **E1 pending one visibility check**:
+Ready X has not yet exposed the successor's post-claim shielded balance through
+`wallet_strk20Balances`. Prepared, simulated, reverted, and unrelated pool
+transactions are not counted as successful evidence.
 
 ## Pinned Starknet Mainnet dependencies
 
@@ -26,11 +27,10 @@ artifact-identity proof for the live pool class.
 | Item | Value | Mainnet status |
 |---|---|---|
 | Compiler profile | `spike-inline-56` | Reproduces locally and in CI |
-| Sierra class hash | `0x066654717cccb9875687a1abc8defe640f08f709c01715ea828f14c1ec5c7f25` | Locked locally; not declared |
-| CASM/compiled class hash | `0x05a3c0719b75e0c4655f707f95c7930b1b72291261138337b5b5ca0f3019e3b7` | Locked locally; not declared |
-| Afterlight contract | — | Not deployed |
-| Surplus administrator | — | Not selected onchain; constructor value pending deployment |
-| Production neutral relayer | — | Not deployed or funded |
+| Sierra class hash | `0x05da9866f62cc6dd1e380e8d9206e78a752b460abdb802070e0be1208ec7b1a6` | Declared on Mainnet |
+| CASM/compiled class hash | `0x055ba10e36aac8e21b3437f1413f009f6b17d3633c307941a4412ce73566251` | Declaration lock |
+| Afterlight contract | `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25` | Deployed on Mainnet |
+| Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; spike controls complete |
 
 Run `scarb --profile spike-inline-56 build` and
 `npm --prefix client run verify:locked-artifacts` to recompute the exact hashes.
@@ -39,17 +39,20 @@ deployer must be treated as a different release and re-verified.
 
 ## Qualifying lifecycle transactions
 
-Each eventual hash must be a successful Starknet Mainnet receipt that touches
+Each hash below is a successful Starknet Mainnet receipt that touches
 the live STRK20 pool and runs through or emits from the declared Afterlight
 contract. Plain Shield transactions and failed attempts do not fill these slots.
 
 | Required branch | Mainnet transaction hash | Validator result |
 |---|---|---|
-| `FUND` Vault A | — | Not run |
-| `CANCEL_REFUND` Vault A | — | Not run |
-| `FUND` Vault B | — | Not run |
-| `CLAIM` Vault B | — | Not run |
+| `FUND` Vault A | `0x030ea14ac22e5806e382658971b686692af280bf2f02173a430f572921121722` | PASS |
+| `CANCEL_REFUND` Vault A | `0x69e2345ae8816986a709de84f0dcb571b5d092400d6c53bf90197480102c0fb` | PASS |
+| `FUND` Vault B | `0x036e003396fe360ae7fe4766646f493c0eb579d82509652559d40e460770682a` | PASS |
+| `CLAIM` Vault B | `0x11c990aea864e755630d41fd1292620c313b3f64407fc0b3a902544c67c8098` | PASS |
 
-There is therefore no E2 exact-note recovery, shielded-balance increase,
-liability reconciliation, deployed demo URL, or submission-ready mainnet
-evidence in this release.
+The official hub validator's exact success, pool-touch, and declared-contract
+ownership checks pass for all four. Vault A is `CANCELLED`, Vault B is
+`CLAIMED`, total locked liability is zero, and the neutral pool allowance is
+zero. Exact-note settlement is proven onchain. The remaining promotion gap is
+the wallet's post-finality display of the successor's expected `1 STRK`
+shielded balance. A public demo URL and final video remain pending.
