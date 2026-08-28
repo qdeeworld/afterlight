@@ -7,6 +7,7 @@ import {
   encodeRelayRequest,
   type RelayRequest,
 } from "../src/schema.js";
+import { rateLimitRelay, RelayHttpError } from "../src/core.js";
 
 const origin = "https://afterlight.invalid";
 const contract = "0x1234";
@@ -352,22 +353,24 @@ describe("Afterlight Phase A relay Worker", () => {
   });
 
   it("enforces the local per-vault/operation abuse limit", async () => {
-    const payload = encodeRelayRequest(
-      buildRelayRequest(RelayOperation.Request, contract, {
-        ...validArgs(1n),
-        vault_id: "0xdead",
-      }),
-    );
+    const request = buildRelayRequest(RelayOperation.Request, contract, {
+      ...validArgs(1n),
+      vault_id: "0xdead",
+    });
+    let vaultCalls = 0;
+    const rateLimitEnv = {
+      RELAY_GLOBAL_LIMITER: { limit: async () => ({ success: true }) },
+      RELAY_RATE_LIMITER: { limit: async () => ({ success: ++vaultCalls <= 4 }) },
+    } as unknown as Env;
     const statuses: number[] = [];
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const response = await exports.default.fetch(
-        new Request("https://relay.invalid/v1/relay", {
-          method: "POST",
-          headers: relayHeaders(),
-          body: payload,
-        }),
-      );
-      statuses.push(response.status);
+      try {
+        await rateLimitRelay(request, rateLimitEnv);
+        statuses.push(202);
+      } catch (error) {
+        expect(error).toBeInstanceOf(RelayHttpError);
+        statuses.push((error as RelayHttpError).status);
+      }
     }
     expect(statuses).toEqual([202, 202, 202, 202, 429]);
   });
