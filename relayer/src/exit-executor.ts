@@ -9,6 +9,7 @@ import {
   parseResourceBounds,
   parseU256Result,
   parseVaultResult,
+  proofFactsForFeeEstimate,
   resourceCapFri,
   validateAllowanceForAction,
   validateAuthorizationInclusionWindow,
@@ -104,22 +105,33 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   } catch { throw exitStage("inclusion_window"); }
   const proofFacts = validated.proof.facts.facts.map(hex);
   const call: Call = { contractAddress: validated.call.contractAddress, entrypoint: validated.call.entrypoint, calldata: validated.call.calldata.map(hex) };
+  const estimateDetails = (facts: readonly string[]) => ({
+    nonce: snapshot.nonce,
+    blockIdentifier: Number(blockNumber),
+    skipValidate: false,
+    proof: validated.proof.data,
+    proofFacts: [...facts],
+    tip: 0,
+    paymasterData: [],
+    accountDeploymentData: [],
+    nonceDataAvailabilityMode: "L1" as const,
+    feeDataAvailabilityMode: "L1" as const,
+  });
   let estimate;
   try {
-    estimate = await account.estimateInvokeFee(call, {
-      nonce: snapshot.nonce,
-      blockIdentifier: Number(blockNumber),
-      skipValidate: false,
-      proof: validated.proof.data,
-      proofFacts,
-      tip: 0,
-      paymasterData: [],
-      accountDeploymentData: [],
-      nonceDataAvailabilityMode: "L1",
-      feeDataAvailabilityMode: "L1",
-    });
+    estimate = await account.estimateInvokeFee(call, estimateDetails(proofFacts));
   } catch (error) {
-    throw exitStage(`estimate_${classifyEstimateFailure(error)}`);
+    if (rpcErrorCode(error) !== 41) throw exitStage(`estimate_${classifyEstimateFailure(error)}`);
+    try {
+      // Some Starknet estimators execute the SDK proof envelope (PROOF0), even
+      // though accepted STRK20 transactions carry Ready's real PROOF1 facts.
+      // Normalize only the estimate copy. The signed and broadcast transaction
+      // below remains bound to the untouched real proof facts.
+      const estimateFacts = proofFactsForFeeEstimate(validated.proof.facts.facts).map(hex);
+      estimate = await account.estimateInvokeFee(call, estimateDetails(estimateFacts));
+    } catch (fallbackError) {
+      throw exitStage(`estimate_fallback_${classifyEstimateFailure(fallbackError)}`);
+    }
   }
   let bounds;
   let networkCap;
@@ -233,11 +245,7 @@ function exitStage(stage: string): ExitExecutorError {
 function classifyEstimateFailure(error: unknown): string {
   // Emit only a fixed category. Never log the upstream message because RPC
   // execution errors can echo calldata, proof material, note IDs or signatures.
-  const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : undefined;
-  const base = typeof record?.baseError === "object" && record.baseError !== null
-    ? record.baseError as Record<string, unknown>
-    : undefined;
-  const code = typeof record?.code === "number" ? record.code : typeof base?.code === "number" ? base.code : undefined;
+  const code = rpcErrorCode(error);
   if (code === 41) return "rpc_execution";
   if (code === 52) return "rpc_transaction_nonce";
   if (code === 53) return "rpc_validate_resources";
@@ -251,4 +259,12 @@ function classifyEstimateFailure(error: unknown): string {
   if (message.includes("revert") || message.includes("execution")) return "execution";
   if (message.includes("timeout") || message.includes("network") || message.includes("fetch")) return "transport";
   return "unknown";
+}
+
+function rpcErrorCode(error: unknown): number | undefined {
+  const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : undefined;
+  const base = typeof record?.baseError === "object" && record.baseError !== null
+    ? record.baseError as Record<string, unknown>
+    : undefined;
+  return typeof record?.code === "number" ? record.code : typeof base?.code === "number" ? base.code : undefined;
 }

@@ -33,6 +33,7 @@ export type ResourceBounds = Readonly<{
 
 export function validatePolicy(policy: unknown): ExitPolicyResult;
 export function validatePreparedExitPackage(input: unknown, policy: unknown): ValidatedExit;
+export function proofFactsForFeeEstimate(raw: readonly string[]): readonly string[];
 export function parseResourceBounds(value: unknown): ResourceBounds;
 export function addResourceMargins(bounds: ResourceBounds, amountMarginBps: bigint, priceMarginBps: bigint): ResourceBounds;
 export function resourceCapFri(bounds: ResourceBounds): bigint;
