@@ -34,7 +34,9 @@ const EXIT_POLICY = Object.freeze({
   poolFeeEachFri: "6000000000000000000",
   initialPoolAllowanceFri: "12000000000000000000",
   postSpendHealthFloorFri: "1000000000000000000",
-  maxNetworkFeePerExitFri: "9027538581262736234",
+  // The proven E2 CLAIM used 2.832236 STRK of network fee. A 4 STRK hard cap
+  // leaves 41% headroom while keeping the public E3 sponsor budget bounded.
+  maxNetworkFeePerExitFri: "4000000000000000000",
   amountMarginBps: "10300",
   priceMarginBps: "10300",
   maxEstimateAgeBlocks: "300",
