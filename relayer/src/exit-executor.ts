@@ -35,9 +35,11 @@ const EXIT_POLICY = Object.freeze({
   poolFeeEachFri: "6000000000000000000",
   initialPoolAllowanceFri: "12000000000000000000",
   postSpendHealthFloorFri: "1000000000000000000",
-  // The proven E2 CLAIM used 2.832236 STRK of network fee. A 4 STRK hard cap
-  // leaves 41% headroom while keeping the public E3 sponsor budget bounded.
-  maxNetworkFeePerExitFri: "4000000000000000000",
+  // The accepted E2 claim consumed about 2.832 STRK, while its full validated
+  // resource-bounds reservation was 7.436710911292439270 STRK. Keep a narrow,
+  // explicit ceiling above that proven reservation without weakening the
+  // separate 1 STRK post-spend health floor.
+  maxNetworkFeePerExitFri: "7500000000000000000",
   amountMarginBps: "10300",
   priceMarginBps: "10300",
   maxEstimateAgeBlocks: "300",
