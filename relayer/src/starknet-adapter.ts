@@ -113,10 +113,22 @@ export class StarknetV3RelayAdapter implements StarknetRelayAdapter {
   async reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt> {
     await this.assertChain(plan);
     const normalizedHash = normalizeHex(transactionHash);
-    const [receipt, submitted] = await Promise.all([
-      this.provider.waitForTransaction(normalizedHash, { retries: 30, retryInterval: 2_000 }),
-      this.provider.getTransactionByHash(normalizedHash),
-    ]);
+    let receipt: Awaited<ReturnType<RpcProvider["getTransactionReceipt"]>> | undefined;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      try {
+        const candidate = await this.provider.getTransactionReceipt(normalizedHash);
+        if (!candidate.isError()) {
+          receipt = candidate;
+          break;
+        }
+      } catch {
+        // RPC propagation can lag the accepted broadcast. Keep the single
+        // submitted reservation serialized while waiting for its receipt.
+      }
+      if (attempt < 29) await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+    if (receipt === undefined) return { status: "pending" };
+    const submitted = await this.provider.getTransactionByHash(normalizedHash);
     const candidate = submitted as unknown as Record<string, unknown>;
     if (
       candidate.type !== "INVOKE" ||
@@ -130,7 +142,6 @@ export class StarknetV3RelayAdapter implements StarknetRelayAdapter {
     ) {
       return { status: "rejected" };
     }
-    if (receipt.isError()) return { status: "pending" };
     const raw = receipt.value as unknown as Record<string, unknown>;
     const actualFeeFri = readActualFeeFri(raw.actual_fee);
     if (actualFeeFri === undefined) return { status: "pending" };
