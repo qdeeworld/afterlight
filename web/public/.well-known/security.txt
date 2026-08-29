@@ -1,5 +1,5 @@
 Contact: https://github.com/dolepee/afterlight/security/advisories/new
-Expires: 2027-08-31T23:59:00Z
+Expires: 2027-08-28T23:59:00Z
 Canonical: https://afterlight.dolepee.com/.well-known/security.txt
 Policy: https://github.com/dolepee/afterlight/security/policy
 Preferred-Languages: en
