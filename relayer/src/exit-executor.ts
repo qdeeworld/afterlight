@@ -141,7 +141,6 @@ export function validatePreparedExitPayload(payload: string): ValidatedExit {
 }
 
 export async function executePreparedExit(payload: string, env: Env, budget: BudgetCoordinator, prevalidated?: ValidatedExit): Promise<ExitResult> {
-  if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
   const validated = prevalidated ?? validatePreparedExitPayload(payload);
 
   // The binding is already a domain-separated SHA-256 over the complete exit
@@ -166,6 +165,10 @@ export async function executePreparedExit(payload: string, env: Env, budget: Bud
     }
     return { status: "duplicate", transactionHash: prior.transactionHash };
   }
+  // The kill switch blocks every fresh signature and broadcast, but cannot
+  // strand a transaction already recorded as SUBMITTED. Receipt-only
+  // reconciliation above is safe while submission is disabled.
+  if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
   try {
     if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new Error("wrong_chain");
   } catch { throw exitStage("chain"); }

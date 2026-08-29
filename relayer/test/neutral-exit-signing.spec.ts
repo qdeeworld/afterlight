@@ -102,8 +102,36 @@ describe("neutral exact-exit signing boundary", () => {
     expect(budget.finalize).toHaveBeenCalledWith(binding, binding, transactionHash, "70", "succeeded", expect.any(Number));
   });
 
-  it("does not enter claim validation or signing when the deployment kill switch is off", async () => {
-    await expect(executePreparedExit("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "exit_unavailable" });
+  it("reconciles a stored SUBMITTED exit while fresh submission is disabled", async () => {
+    const transactionHash = "0xabc";
+    const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
+    vi.spyOn(RpcProvider.prototype, "waitForTransaction").mockResolvedValue({
+      isError: () => false,
+      isReverted: () => false,
+      value: { transaction_hash: transactionHash, actual_fee: { amount: "70" } },
+    } as any);
+    const budget = {
+      lookup: vi.fn().mockResolvedValue({
+        outcome: "found",
+        state: "submitted",
+        exactFingerprint: validated.bindingSha256,
+        transactionHash,
+      }),
+      finalize: vi.fn().mockResolvedValue({ outcome: "committed" }),
+    } as any;
+    await expect(executePreparedExit("{}", {
+      SUBMIT_ENABLED: "false",
+      EXIT_RPC_URL: "https://rpc.invalid",
+      STARKNET_RPC_AUTH_TOKEN: "configured",
+    } as any, budget, validated)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash,
+    });
+    expect(budget.finalize).toHaveBeenCalledOnce();
+  });
+
+  it("validates before the kill switch and never signs a fresh disabled exit", async () => {
+    await expect(executePreparedExit("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "invalid_exit" });
   });
 
   it("signs the real proof facts and reconstructs the exact outer hash offline", async () => {

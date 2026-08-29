@@ -8,6 +8,7 @@ import {
   type RelayRequest,
 } from "../src/schema.js";
 import { isAllowedOrigin, rateLimitRelay, RelayHttpError } from "../src/core.js";
+import { exitRateLimitIdentity, requireFundingAdmission } from "../src/index.js";
 
 const origin = "https://afterlight.invalid";
 const contract = "0x1234";
@@ -132,6 +133,21 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(JSON.stringify(body)).not.toMatch(/wallet|vault|signature|ready/i);
   });
 
+  it("fails closed before a live funding checkpoint when capacity is not ready", () => {
+    expect(() => requireFundingAdmission({
+      status: "ready",
+      reason: "ready",
+      fundingStatus: "ready",
+      fundingReason: "ready",
+    })).not.toThrow();
+    for (const capacity of [
+      { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" },
+      { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration" },
+    ] as const) {
+      expect(() => requireFundingAdmission(capacity)).toThrowError("funding_unavailable");
+    }
+  });
+
   it("accepts a zero-byte streamed checkpoint body emitted by real HTTP clients", async () => {
     const response = await exports.default.fetch(
       new Request("https://relay.invalid/v1/checkpoint", {
@@ -243,6 +259,18 @@ describe("Afterlight Phase A relay Worker", () => {
       }),
     );
     expect(wrongOrigin.status).toBe(403);
+  });
+
+  it("rate-limits exits by stable vault and action rather than variable package material", async () => {
+    const claimA = await exitRateLimitIdentity("CLAIM", "0x00abc");
+    const claimB = await exitRateLimitIdentity("CLAIM", "0xabc");
+    const cancellation = await exitRateLimitIdentity("CANCEL_REFUND", "0xabc");
+    expect(claimA).toMatch(/^[0-9a-f]{64}$/);
+    expect(claimA).toBe(claimB);
+    expect(cancellation).not.toBe(claimA);
+    await expect(exitRateLimitIdentity("HEARTBEAT", "0xabc")).rejects.toMatchObject({
+      code: "invalid_exit",
+    });
   });
 
   it("derives exact fingerprints from normalized fields, not attacker-controlled JSON ordering", async () => {

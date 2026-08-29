@@ -96,6 +96,33 @@ describe("deployment-wide sponsorship coordinator", () => {
     expect(await budget.snapshot(dayOne, "control")).toMatchObject({ reservedTodayFri: "20", spentTodayFri: "0" });
   });
 
+  it("preserves an unclassified legacy day's exposure against both class ceilings", async () => {
+    const budget = freshBudget();
+    await runInDurableObject(budget, async (instance: RelayBudget) => {
+      const internal = instance as unknown as {
+        ctx: DurableObjectState;
+        migrateLegacyTotals: () => void;
+      };
+      internal.ctx.storage.sql.exec(
+        "INSERT INTO daily_totals (day_key, reserved_fri, spent_fri) VALUES (?, ?, ?)",
+        dayOne,
+        "0",
+        "70",
+      );
+      internal.ctx.storage.sql.exec(
+        "DELETE FROM class_daily_totals WHERE day_key = ?",
+        dayOne,
+      );
+      internal.migrateLegacyTotals();
+      expect(instance.snapshot(dayOne, "control")).toMatchObject({ spentTodayFri: "70" });
+      expect(instance.snapshot(dayOne, "exit")).toMatchObject({ spentTodayFri: "70" });
+      expect(() => instance.reserve({
+        ...reserveInput(semantic, exact, "40", dayOne, 2, "exit"),
+        dailyBudgetFri: "100",
+      })).toThrowError("daily_budget");
+    });
+  });
+
   it("admits only one active Starknet nonce lane at a time", async () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput());

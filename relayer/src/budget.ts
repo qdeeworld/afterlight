@@ -174,11 +174,20 @@ export class RelayBudget extends DurableObject<Env> {
         "ALTER TABLE reservations ADD COLUMN budget_class TEXT NOT NULL DEFAULT 'control' CHECK (budget_class IN ('control', 'exit'))",
       );
     }
-    // Preserve all exposure from the pre-class ledger conservatively as
-    // control spend. This migration never resets an existing daily ceiling.
+    // The legacy ledger did not identify whether a reservation paid for a
+    // control or exit transaction. Preserve its aggregate against both class
+    // ceilings until UTC rollover. Double-counting across independent class
+    // ceilings is deliberately conservative and prevents an in-place upgrade
+    // from resetting either kind of same-day exposure.
+    this.migrateLegacyTotals();
+  }
+
+  private migrateLegacyTotals(): void {
     this.ctx.storage.sql.exec(`
       INSERT OR IGNORE INTO class_daily_totals (budget_class, day_key, reserved_fri, spent_fri)
       SELECT 'control', day_key, reserved_fri, spent_fri FROM daily_totals
+      UNION ALL
+      SELECT 'exit', day_key, reserved_fri, spent_fri FROM daily_totals
     `);
   }
 

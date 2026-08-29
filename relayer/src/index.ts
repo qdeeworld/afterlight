@@ -68,8 +68,7 @@ export default {
         await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
         const validated = validatePreparedExitPayload(payload);
-        await rateLimitValidatedExit(env, validated.bindingSha256);
-        if (!isSubmissionEnabled(env.SUBMIT_ENABLED)) throw new RelayHttpError(503, "submission_disabled");
+        await rateLimitValidatedExit(env, await exitRateLimitIdentity(validated.action, validated.metadata.vaultId));
         const readiness = executorReadiness(env);
         if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
@@ -78,6 +77,9 @@ export default {
       } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
+        if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
+          requireFundingAdmission(await readClaimCapacity(env));
+        }
         plan = await prepareCheckpointPlan(env, Date.now());
       } else {
         requireRelayHeaders(request, env);
@@ -160,7 +162,14 @@ export default {
         error instanceof RelayHttpError
           ? error
           : error instanceof ExitExecutorError
-            ? new RelayHttpError(error.code === "invalid_exit" ? 422 : error.code === "exit_busy" ? 503 : 502, error.code)
+            ? new RelayHttpError(
+                error.code === "invalid_exit"
+                  ? 422
+                  : error.code === "exit_busy" || error.code === "exit_unavailable"
+                    ? 503
+                    : 502,
+                error.code,
+              )
           : executorCode !== undefined
             ? new RelayHttpError(executorCode === "relayer_busy" ? 503 : 502, executorCode)
           : new RelayHttpError(500, "internal_error");
@@ -241,6 +250,12 @@ function isSubmissionEnabled(value: string): boolean {
   return value === "true";
 }
 
+export function requireFundingAdmission(capacity: Awaited<ReturnType<typeof readClaimCapacity>>): void {
+  if (capacity.fundingStatus !== "ready") {
+    throw new RelayHttpError(503, "funding_unavailable");
+  }
+}
+
 function preflight(request: Request, env: Env): Response {
   const origin = request.headers.get("origin");
   const intent = request.headers.get("access-control-request-headers")?.toLowerCase() ?? "";
@@ -277,4 +292,15 @@ async function rateLimitExitIngress(env: Env): Promise<void> {
 async function rateLimitValidatedExit(env: Env, bindingSha256: string): Promise<void> {
   const outcome = await env.EXIT_RATE_LIMITER.limit({ key: bindingSha256 });
   if (!outcome.success) throw new RelayHttpError(429, "rate_limited");
+}
+
+/** Stable across signatures, proofs, expiries, and destination variants. */
+export async function exitRateLimitIdentity(action: string, vaultId: string): Promise<string> {
+  if (action !== "CLAIM" && action !== "CANCEL_REFUND") throw new RelayHttpError(422, "invalid_exit");
+  const canonicalVault = `0x${BigInt(vaultId).toString(16)}`;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`afterlight-exit-rate-limit-v1:${action}:${canonicalVault}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
