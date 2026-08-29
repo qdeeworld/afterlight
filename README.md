@@ -8,6 +8,13 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 [![CI](https://github.com/dolepee/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/dolepee/afterlight/actions/workflows/ci.yml)
 
+| Rubric | Present evidence |
+|---|---|
+| STRK20 integration depth | Private funding, cancellation/refund, and exact-note recovery through the canonical pool and custom Afterlight helper |
+| Working Mainnet product | Public Ready X app, deployed contract, five qualifying receipts, and a founder-operated E3 lifecycle |
+| Innovation | Authenticated inactivity, heartbeat, veto, designated-successor authorization, and one exact private destination |
+| Open source | Reproducible artifacts, CI, read-only Mainnet verifier, threat model, operations guide, and MIT license |
+
 ## Current status
 
 **Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://voyager.online/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
@@ -75,6 +82,7 @@ scarb --profile spike-inline-56 build
 
 npm --prefix client ci
 npm --prefix client run verify:locked-artifacts
+npm --prefix client run verify:mainnet
 npm --prefix client test
 
 npm --prefix relayer ci

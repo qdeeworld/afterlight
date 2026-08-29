@@ -6,7 +6,7 @@ operator primitives. It has no public product UI or production storage. Its
 quote, preflight, and operator tools can read Mainnet; only the explicitly labelled
 operator buttons can request a wallet declaration or deployment, and each still
 requires a visible Ready X confirmation. The deployed Mainnet release and its
-four qualifying receipts are recorded in [`../docs/MAINNET.md`](../docs/MAINNET.md).
+five qualifying receipts are recorded in [`../docs/MAINNET.md`](../docs/MAINNET.md).
 
 ```sh
 npm ci
@@ -20,8 +20,12 @@ Ready exactly an `OPEN` transfer followed by the helper invoke. They never add a
 public self-withdraw. Ready adds its own private paymaster-fee withdrawal during
 submission. Afterlight reproduced this exact-note route through its own helper
 for both `CANCEL_REFUND` and `CLAIM` on Mainnet. The contract states, liability,
-pool allowance, exact destination notes, and four qualifying receipts reconcile;
-Ready's wallet-visible post-exit balance remains the final E2 visibility check.
+pool allowance, exact destination notes, and five qualifying receipts reconcile;
+fresh Ready reads proved the E2 and public E3 shielded-balance increases.
+
+Run `npm run verify:mainnet` for a read-only check of the five qualifying
+receipts, deployed class and configuration, neutral control senders, terminal
+vault states, and zero locked liability.
 
 Application secrets are held by `LocalStarkKey`; ordinary serialization exposes only the public key. Raw secret export requires the explicitly named backup method and confirmation constant. Relayer requests contain only signed public calldata for `HEARTBEAT`, `REQUEST`, or `VETO`.
 
