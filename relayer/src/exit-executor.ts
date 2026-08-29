@@ -118,7 +118,17 @@ export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinato
       ? { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" }
       : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
     if (budget === undefined) return chainCapacity;
-    return applyLedgerCapacity(chainCapacity, await budget.snapshot(new Date().toISOString().slice(0, 10), "exit"));
+    const dayKey = new Date().toISOString().slice(0, 10);
+    const [exitLedger, controlLedger] = await Promise.all([
+      budget.snapshot(dayKey, "exit"),
+      budget.snapshot(dayKey, "control"),
+    ]);
+    return applyLedgerCapacity(chainCapacity, {
+      ...exitLedger,
+      reservedCount: exitLedger.reservedCount + controlLedger.reservedCount,
+      submittedCount: exitLedger.submittedCount + controlLedger.submittedCount,
+      sponsorshipFrozen: exitLedger.sponsorshipFrozen || controlLedger.sponsorshipFrozen,
+    });
   } catch {
     return unknownCapacity();
   }
