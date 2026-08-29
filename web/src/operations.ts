@@ -29,7 +29,7 @@ import {
 } from "./config.ts";
 import type { RecoveryInvitation, VaultSnapshot } from "./model.ts";
 import type { ReadySession } from "./wallet.ts";
-import { waitForSuccess } from "./chain.ts";
+import { TransactionExecutionError, waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
 
 export function generateKey(): LocalStarkKey {
@@ -374,7 +374,18 @@ export async function submitExitPackage(
     throw new ExitSubmissionError(reason, body.code, ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""));
   }
   const transactionHash = num.toHex(BigInt(body.result.transactionHash));
-  await waitForSuccess(transactionHash);
+  try {
+    await waitForSuccess(transactionHash);
+  } catch (error) {
+    if (error instanceof TransactionExecutionError) {
+      throw new ExitSubmissionError(
+        "The private exit was confirmed but reverted. Its retained package has been cleared; refresh the vault before preparing another exit.",
+        "exit_reverted",
+        false,
+      );
+    }
+    throw error;
+  }
   return {
     transactionHash,
     actualFeeFri: body.result.actualFeeFri,

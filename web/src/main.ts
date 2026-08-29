@@ -202,7 +202,7 @@ function walletRow(): string {
 }
 
 function canFundReserve(): boolean {
-  return fundingCapacity === "ready"
+  return (fundingCapacity === "ready" || hasPendingCheckpointReconciliation())
     && walletStatus === "connected"
     && privateBalance !== undefined
     && privateBalance >= 7n * 10n ** 18n
@@ -215,6 +215,7 @@ function canFundReserve(): boolean {
 function ownerView(): string {
   const invitation = parseInvitation(invitationText);
   const canFund = canFundReserve();
+  const pendingFunding = hasPendingCheckpointReconciliation();
   const liveControls = invitation.valid && vault?.exists;
   return `<section class="journey" data-role-view="owner" aria-labelledby="owner-heading">
     <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"} · 1 STRK</span></div>
@@ -228,8 +229,8 @@ function ownerView(): string {
       <label class="full-field"><span>Designated successor public key</span><input name="successor-key" autocomplete="off" spellcheck="false" placeholder="0x…" value="${escapeHtml(successorPublicKey)}" /><small>The successor must generate this independently. Do not accept their secret.</small></label>
       <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this reserve uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction. Neutral exit sponsorship is capacity-limited and rechecked later; recovery or cancellation waits if capacity must be restored.</p></aside>
       <label class="ack"><input name="cost-ack" type="checkbox" ${costAcknowledged ? "checked" : ""} /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
-      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : fundingCapacity === "unknown" ? "Recovery capacity unavailable" : !costAcknowledged ? "Confirm the 7 STRK cost to continue" : "Create and privately fund reserve"}</button>
-      ${fundingCapacity === "exhausted" ? `<p class="error">The supported route already has an outstanding reserve or private-exit capacity needs replenishment. New funding stays paused; existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
+      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${pendingFunding ? "Reconcile pending funding checkpoint" : fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : fundingCapacity === "unknown" ? "Recovery capacity unavailable" : !costAcknowledged ? "Confirm the 7 STRK cost to continue" : "Create and privately fund reserve"}</button>
+      ${pendingFunding ? `<p class="warning">This tab has an unresolved funding checkpoint. Continue only to reconcile that exact attempt; the Worker still performs the authoritative owner-aware capacity check.</p>` : fundingCapacity === "exhausted" ? `<p class="error">The supported route already has an outstanding reserve or private-exit capacity needs replenishment. New funding stays paused; existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
       ${applicationKey && backupState !== "verified" ? `<p class="error">Download and restore the owner key backup before funding.</p>` : ""}
     </form>
@@ -261,6 +262,8 @@ function invitationPanel(parsed: ReturnType<typeof parseInvitation>): string {
 function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot): string {
   if (!snapshot) return `<section class="control-panel next-action"><div class="section-heading"><span class="step-number">04</span><div><strong>Read the live reserve</strong><p>Confirm the current Mainnet state before taking action.</p></div></div><button class="button primary" data-action="load-vault" ${busy ? "disabled" : ""}>Read live vault state</button></section>`;
   const current = stateName(snapshot.state);
+  const pendingCancellation = role === "owner" && pendingExit?.action === "CANCEL_REFUND" && pendingExit.vaultId === invitation.vaultId;
+  const pendingClaim = role === "successor" && pendingExit?.action === "CLAIM" && pendingExit.vaultId === invitation.vaultId;
   const now = Math.floor(Date.now() / 1000);
   const inactiveAt = Number(snapshot.lastHeartbeat) + Number(snapshot.inactivitySeconds);
   const requestReady = current === "ACTIVE" && now >= inactiveAt;
@@ -274,10 +277,12 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
   const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note." : "The reserve returned privately to its owner.";
   return `<section class="control-panel live-state" data-vault-state="${current}"><div class="control-heading"><div><span class="state-chip">${current}</span><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
-    ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || (exitCapacity !== "ready" && pendingExit?.action !== "CANCEL_REFUND") || busy ? "disabled" : ""}>${pendingExit?.action === "CANCEL_REFUND" ? "Reconcile pending cancellation" : "Cancel and return 1 STRK privately"}</button>${exitCapacity !== "ready" && pendingExit?.action !== "CANCEL_REFUND" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${pendingCancellation ? `<button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private return</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
+    ${pendingClaim ? `<button class="button primary" data-action="claim" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private recovery</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
+    ${role === "owner" && current === "ACTIVE" && !pendingCancellation ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || exitCapacity !== "ready" || busy ? "disabled" : ""}>Cancel and return 1 STRK privately</button>${exitCapacity !== "ready" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     ${role === "owner" && current === "GRACE" ? `<button class="button primary" data-control="VETO" ${!applicationKey || busy ? "disabled" : ""}>Veto recovery</button>` : ""}
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!applicationKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
-    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && (exitCapacity === "ready" || pendingExit?.action === "CLAIM") ? "" : "disabled"} data-action="claim">${pendingExit?.action === "CLAIM" ? "Reconcile pending claim" : exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady && pendingExit?.action !== "CLAIM" ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${role === "successor" && current === "GRACE" && !pendingClaim ? `<button class="button primary" ${claimReady && ready && applicationKey && exitCapacity === "ready" ? "" : "disabled"} data-action="claim">${exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     <p class="action-help">Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
   </section>`;
 }
@@ -296,13 +301,14 @@ function statusPanel(): string {
 }
 
 function render(): void {
+  const reconcilingCancellation = pendingExit?.action === "CANCEL_REFUND";
   app.innerHTML = `<header class="site-header"><a class="brand" href="/"><span aria-hidden="true">◐</span>Afterlight</a><div class="network"><span aria-hidden="true"></span>Live on Starknet Mainnet</div></header>
   <main id="main"><section class="intro"><div><p class="kicker">Private recovery, under your control</p><h1>A private reserve for the person you trust.</h1><p>Keep the relationship unlinked. Heartbeat while active, veto during grace, and let only the designated successor key authorize private recovery.</p></div><div class="promise"><span>01</span><p><strong>Fund privately</strong><small>The owner-to-vault link stays unlinked.</small></p><span>02</span><p><strong>Stay in control</strong><small>Heartbeat or veto through a neutral relay.</small></p><span>03</span><p><strong>Recover exactly once</strong><small>One designated key. One exact private note.</small></p></div></section>
   <nav class="role-tabs" aria-label="Choose your role"><button data-role="owner" aria-current="${role === "owner" ? "page" : "false"}">I’m the owner</button><button data-role="successor" aria-current="${role === "successor" ? "page" : "false"}">I’m the successor</button></nav>
   <div class="activity-banner" role="status" aria-live="polite" data-busy="${busy}"><span aria-hidden="true">${busy ? "…" : "●"}</span><p>${busy ? "Working · " : ""}${escapeHtml(notice)}</p></div>
   <div class="content-grid">${role === "owner" ? ownerView() : successorView()}${statusPanel()}</div></main>
   <footer><span>Afterlight is a recovery tool, not legal inheritance automation.</span><a href="https://github.com/dolepee/afterlight">Open-source contract</a></footer>
-  <dialog id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-description"><form method="dialog"><p class="eyebrow">Private return</p><h2 id="cancel-title">Cancel this reserve?</h2><p id="cancel-description">Its 1 STRK principal returns to this Ready X private balance. The reserve cannot be recovered afterward.</p><div class="button-row"><button class="button secondary" type="button" data-action="dismiss-cancel">Keep reserve active</button><button class="button danger" type="button" data-action="confirm-cancel">Cancel and return 1 STRK</button></div></form></dialog>`;
+  <dialog id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-description"><form method="dialog"><p class="eyebrow">Private return</p><h2 id="cancel-title">${reconcilingCancellation ? "Reconcile the pending return?" : "Cancel this reserve?"}</h2><p id="cancel-description">${reconcilingCancellation ? "Afterlight will resubmit the exact retained package only to reconcile its receipt. No new note or authorization is prepared." : "Its 1 STRK principal returns to this Ready X private balance. The reserve cannot be recovered afterward."}</p><div class="button-row"><button class="button secondary" type="button" data-action="dismiss-cancel">${reconcilingCancellation ? "Not now" : "Keep reserve active"}</button><button class="button danger" type="button" data-action="confirm-cancel">${reconcilingCancellation ? "Reconcile exact package" : "Cancel and return 1 STRK"}</button></div></form></dialog>`;
   bindEvents();
 }
 

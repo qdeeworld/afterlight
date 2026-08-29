@@ -4,6 +4,13 @@ import type { VaultSnapshot } from "./model.ts";
 
 export const provider = new RpcProvider({ nodeUrl: RPC_URL });
 
+export class TransactionExecutionError extends Error {
+  constructor() {
+    super("The Mainnet transaction was confirmed but did not succeed.");
+    this.name = "TransactionExecutionError";
+  }
+}
+
 function hex(value: unknown): string {
   return num.toHex(BigInt(String(value ?? 0)));
 }
@@ -43,5 +50,5 @@ export async function readLiability(): Promise<bigint> {
 export async function waitForSuccess(transactionHash: string): Promise<void> {
   const receipt = await provider.waitForTransaction(transactionHash, { retryInterval: 4_000 });
   const value = (receipt as unknown as { value?: Record<string, unknown> }).value ?? receipt as unknown as Record<string, unknown>;
-  if (String(value.execution_status ?? "") !== "SUCCEEDED") throw new Error("The Mainnet transaction did not succeed.");
+  if (String(value.execution_status ?? "") !== "SUCCEEDED") throw new TransactionExecutionError();
 }
