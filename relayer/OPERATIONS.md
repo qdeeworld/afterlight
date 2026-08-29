@@ -64,7 +64,7 @@ promotion; a green inert check is never production readiness evidence.
 Monitor through at least 2026-09-04:
 
 - `/health` availability and collapsed balance status;
-- `/health.claimCapacity`; stop new reserves whenever it is not `ready`. A zero pool allowance after a completed claim is an intentional exhausted state until one newly reviewed, bounded allowance is provisioned.
+- `/health.claimCapacity`; stop new reserves whenever `fundingStatus` is not `ready`. The exact ready allowance is `12 STRK`, covering one claim or cancellation, and funding is ready only when total locked liability is zero. After either exit, the remaining `6 STRK` is an intentional exhausted state until one newly reviewed, bounded allowance is provisioned.
 - relayer public STRK balance below the configured threshold;
 - Durable Object sponsorship freeze state;
 - reservations remaining `RESERVED` or `SUBMITTED` beyond the receipt window;

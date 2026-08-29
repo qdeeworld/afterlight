@@ -31,9 +31,9 @@ export interface RecoveryInvitation {
   successorKey: string;
   token: "STRK";
   amount: "1";
-  mode: "FAST_DEMO";
-  inactivitySeconds: "300";
-  graceSeconds: "300";
+  mode: "NORMAL" | "FAST_DEMO";
+  inactivitySeconds: "2592000" | "300";
+  graceSeconds: "604800" | "300";
 }
 
 export type InvitationResult =
@@ -51,9 +51,10 @@ export function parseInvitation(value: string): InvitationResult {
     for (const key of ["vaultId", "ownerKey", "successorKey"] as const) {
       if (!/^0x[0-9a-f]{1,64}$/i.test(String(parsed[key]))) return { valid: false, reason: `${key} is invalid.` };
     }
-    if (parsed.token !== "STRK" || parsed.amount !== "1" || parsed.mode !== "FAST_DEMO" || parsed.inactivitySeconds !== "300" || parsed.graceSeconds !== "300") {
-      return { valid: false, reason: "This release supports the 1 STRK, five-minute Recovery Drill only." };
-    }
+    if (parsed.token !== "STRK" || parsed.amount !== "1") return { valid: false, reason: "Invitation token or reserve does not match this release." };
+    const normal = parsed.mode === "NORMAL" && parsed.inactivitySeconds === "2592000" && parsed.graceSeconds === "604800";
+    const drill = parsed.mode === "FAST_DEMO" && parsed.inactivitySeconds === "300" && parsed.graceSeconds === "300";
+    if (!normal && !drill) return { valid: false, reason: "Invitation timing does not match a contract-enforced Afterlight mode." };
     return { valid: true, invitation: parsed as unknown as RecoveryInvitation };
   } catch {
     return { valid: false, reason: "Invitation is not valid Afterlight JSON." };

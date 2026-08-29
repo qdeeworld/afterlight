@@ -4,7 +4,7 @@ This directory contains the tested neutral control-plane relayer implementation.
 It consumes the canonical `afterlight-relay/1` control schema from `../client`,
 accepts `HEARTBEAT`, `REQUEST`, and `VETO`, and includes a fail-closed Starknet
 v3 signer/RPC adapter. It also accepts a strict `afterlight-prepared-neutral-exit/1`
-package for public `CLAIM` settlement. The production Worker is deployed and
+package for public `CLAIM` or `CANCEL_REFUND` settlement. The production Worker is deployed and
 funded; a separate submission-disabled configuration remains available for
 inert packaging and health tests.
 
@@ -25,9 +25,9 @@ inert packaging and health tests.
 - Starknet v3 simulation freezes the nonce and exact resource bounds. The budget reserves a larger policy maximum; signing reuses the frozen bounds without estimating again and rejects encoded exposure above the reservation.
 - Submitted and mined account transactions are reconciled against the neutral account and exact Cairo execute calldata before the receipt is accepted.
 - `POST /v1/checkpoint` builds the permissionless `sync_funding_checkpoint` call with no request body, wallet, vault, note, or signature identifier. A global 15-second idempotency bucket and dedicated rate limiter bound sponsorship.
-- `POST /v1/exit` accepts only a designated-key-authorized `CLAIM` package from the configured product origin. It locks the exact three-action pool call (`WriteOnce`, `EmitOpenNoteCreated`, `Invoke`), canonical note storage write, proof data/output/facts, pinned pool class, application signature, destination note, live vault state, allowance, balance, resource quote, and outer transaction hash before one broadcast.
+- `POST /v1/exit` accepts only a designated successor-key `CLAIM` or designated owner-key `CANCEL_REFUND` package from the configured product origin. It locks the exact three-action pool call (`WriteOnce`, `EmitOpenNoteCreated`, `Invoke`), canonical note storage write, proof data/output/facts, pinned pool class, application signature, destination note, live vault state, allowance, balance, resource quote, and outer transaction hash before one broadcast.
 - `SUBMIT_ENABLED=false` disables checkpoint, control, and exit broadcasts. A retry of a stored `SUBMITTED` exit only reconciles its existing hash; it never signs or broadcasts again. Duplicate and unknown RPC errors remain ambiguous and keep the reservation locked.
-- `/health` exposes a collapsed `claimCapacity` state. The product refuses new funding unless the live neutral balance and exact pool allowance can cover one bounded claim plus the health floor.
+- `/health` exposes collapsed exit and funding states inside `claimCapacity`. The product refuses new funding unless the live neutral balance and exact `12 STRK` allowance can cover one bounded claim or cancellation, the health floor, and the contract has zero outstanding liability. This permits at most one live reserve. A successful exit consumes `6 STRK` of allowance and exhausts this one-at-a-time capacity until a reviewed replenishment.
 
 ## Production configuration
 

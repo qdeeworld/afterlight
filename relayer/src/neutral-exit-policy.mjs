@@ -73,8 +73,8 @@ const ACTION_POLICY = Object.freeze({
     roleNonceIndex: 14,
     eventName: "RecoveryClaimed",
     eventSelector: RECOVERY_CLAIMED_SELECTOR,
-    allowanceBeforeFri: LOCKED_POOL_FEE_FRI,
-    allowanceAfterFri: 0n,
+    allowanceBeforeFri: LOCKED_INITIAL_ALLOWANCE_FRI,
+    allowanceAfterFri: LOCKED_POOL_FEE_FRI,
   }),
 });
 

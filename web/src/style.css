@@ -107,7 +107,9 @@ h1 { margin: 0; max-width: 850px; font-family: Georgia, "Times New Roman", serif
 
 .button-row { display: flex; flex-wrap: wrap; gap: 10px; }
 fieldset { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; border: 0; padding: 0; margin: 0; }
-.choice { display: flex; align-items: center; min-height: 76px; padding: 14px; background: var(--soft-2); border-left: 3px solid var(--accent); }
+.choice { display: flex; align-items: center; gap: 10px; min-height: 76px; padding: 14px; background: var(--soft-2); border: 1px solid transparent; border-left: 3px solid var(--line-strong); cursor: pointer; }
+.choice.selected { border-color: #d7b79e; border-left-color: var(--accent); background: #fff4e9; }
+.choice input { flex: 0 0 auto; width: 18px; min-height: 18px; margin: 0; accent-color: var(--accent-dark); }
 .choice span { margin: 0; }
 .choice small, label small { display: block; color: var(--muted); margin-top: 4px; font-weight: 400; line-height: 1.45; }
 .full-field { display: block; margin: 6px 0; }
@@ -163,6 +165,8 @@ details > summary { min-height: 44px; display: flex; align-items: center; color:
 .button.primary:hover:not(:disabled) { background: #34342e; }
 .button.secondary { border: 1px solid var(--line-strong); color: var(--ink); background: var(--paper); }
 .button.secondary:hover:not(:disabled) { border-color: var(--ink); background: var(--soft-2); }
+.button.danger { border: 1px solid #b97166; color: var(--error); background: #fff7f5; }
+.button.danger:hover:not(:disabled) { border-color: var(--error); background: #fff0ed; }
 .error { margin: 0; color: var(--error); font-weight: 650; }
 
 footer { max-width: 1240px; min-height: 84px; margin: 0 auto; padding: 22px 28px; display: flex; justify-content: space-between; gap: 24px; align-items: center; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; }

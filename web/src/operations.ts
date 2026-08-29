@@ -4,6 +4,7 @@ import {
   PREPARE_SIGNATURE,
   PrivateAction,
   bindDappSubmittedPreparedExit,
+  buildCancelRefundActions,
   buildClaimActions,
   buildFundActions,
   resolveSimulatedPreparedExitNoteId,
@@ -20,6 +21,8 @@ import {
   CONTRACT,
   FAST_GRACE_SECONDS,
   FAST_INACTIVITY_SECONDS,
+  NORMAL_GRACE_SECONDS,
+  NORMAL_INACTIVITY_SECONDS,
   POOL,
   RELAYER_URL,
   STRK,
@@ -116,33 +119,38 @@ async function checkpoint(): Promise<string> {
   throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
 }
 
-export async function fundRecoveryDrill(input: {
+export async function fundRecoveryReserve(input: {
   ready: ReadySession;
   ownerKey: LocalStarkKey;
   successorKey: string;
+  mode: "NORMAL" | "FAST_DEMO";
   onCheckpoint?: (hash: string) => void;
   onSubmitted?: (hash: string) => void;
 }): Promise<{ invitation: RecoveryInvitation; transactionHash: string }> {
   const vaultId = freshVaultId();
   const expiry = validUntil();
+  const normal = input.mode === "NORMAL";
+  const mode = normal ? "0" : "1";
+  const inactivitySeconds = normal ? NORMAL_INACTIVITY_SECONDS : FAST_INACTIVITY_SECONDS;
+  const graceSeconds = normal ? NORMAL_GRACE_SECONDS : FAST_GRACE_SECONDS;
   const auth: Authorization = {
     operation: "FUND",
     base: base(vaultId, input.ownerKey.publicKey, "0", "0", "0", expiry),
-    mode: "1",
+    mode,
     successor_key: input.successorKey,
-    inactivity_seconds: FAST_INACTIVITY_SECONDS,
-    grace_seconds: FAST_GRACE_SECONDS,
+    inactivity_seconds: inactivitySeconds,
+    grace_seconds: graceSeconds,
   };
   const signature = input.ownerKey.sign(authorizationHash(auth));
   const actions = buildFundActions(CONTRACT, {
     vault_id: vaultId,
     token: STRK,
     amount: AMOUNT_FRI,
-    mode: "1",
+    mode,
     owner_key: input.ownerKey.publicKey,
     successor_key: input.successorKey,
-    inactivity_seconds: FAST_INACTIVITY_SECONDS,
-    grace_seconds: FAST_GRACE_SECONDS,
+    inactivity_seconds: inactivitySeconds,
+    grace_seconds: graceSeconds,
     valid_until: expiry,
     ...signature,
   });
@@ -162,9 +170,9 @@ export async function fundRecoveryDrill(input: {
       successorKey: num.toHex(BigInt(input.successorKey)),
       token: "STRK",
       amount: "1",
-      mode: "FAST_DEMO",
-      inactivitySeconds: "300",
-      graceSeconds: "300",
+      mode: input.mode,
+      inactivitySeconds,
+      graceSeconds,
     },
   };
 }
@@ -230,34 +238,38 @@ async function sha256ProofData(base64: string): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function prepareClaimPackage(input: {
+export async function prepareExitPackage(input: {
   ready: ReadySession;
   invitation: RecoveryInvitation;
   vault: VaultSnapshot;
-  successorKey: LocalStarkKey;
+  roleKey: LocalStarkKey;
+  action: "CANCEL_REFUND" | "CLAIM";
 }): Promise<Readonly<Record<string, unknown>>> {
-  const { ready, invitation, vault, successorKey } = input;
-  if (!vault.exists || vault.state !== "2") throw new Error("The vault is not in GRACE.");
-  if (Math.floor(Date.now() / 1000) < Number(vault.claimAfter)) throw new Error("The grace period has not finished.");
-  if (num.toHex(BigInt(successorKey.publicKey)) !== num.toHex(BigInt(invitation.successorKey))) throw new Error("This is not the designated successor key.");
+  const { ready, invitation, vault, roleKey, action } = input;
+  const cancel = action === "CANCEL_REFUND";
+  const expectedState = cancel ? "1" : "2";
+  const expectedNonce = cancel ? vault.ownerNonce : vault.successorNonce;
+  const expectedKey = cancel ? invitation.ownerKey : invitation.successorKey;
+  const kind = cancel ? PrivateAction.CancelRefund : PrivateAction.Claim;
+  if (!vault.exists || vault.state !== expectedState) throw new Error(cancel ? "Only an ACTIVE reserve can be cancelled." : "The vault is not in GRACE.");
+  if (!cancel && Math.floor(Date.now() / 1000) < Number(vault.claimAfter)) throw new Error("The grace period has not finished.");
+  if (num.toHex(BigInt(roleKey.publicKey)) !== num.toHex(BigInt(expectedKey))) throw new Error(`This is not the designated ${cancel ? "owner" : "successor"} key.`);
   const expiry = validUntil();
   const sentinelArgs = {
-    vault_id: invitation.vaultId, token: STRK, amount: AMOUNT_FRI, expected_state: "2",
-    expected_epoch: vault.epoch, expected_nonce: vault.successorNonce, note_id: OPEN_NOTE_PLACEHOLDER,
+    vault_id: invitation.vaultId, token: STRK, amount: AMOUNT_FRI, expected_state: expectedState,
+    expected_epoch: vault.epoch, expected_nonce: expectedNonce, note_id: OPEN_NOTE_PLACEHOLDER,
     valid_until: expiry, ...PREPARE_SIGNATURE,
   };
-  const sentinelActions = buildClaimActions(CONTRACT, ready.address, sentinelArgs);
+  const actionBuilder = cancel ? buildCancelRefundActions : buildClaimActions;
+  const sentinelActions = actionBuilder(CONTRACT, ready.address, sentinelArgs);
   const sentinelPrepared = await ready.prepare(sentinelActions, true);
-  const noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, PrivateAction.Claim, sentinelArgs);
-  const auth: Authorization = {
-    operation: "CLAIM",
-    base: { ...base(invitation.vaultId, invitation.successorKey, "2", vault.epoch, vault.successorNonce, expiry), note_id: noteId },
-    requested_at: vault.requestedAt,
-    claim_after: vault.claimAfter,
-  };
-  const signature = successorKey.sign(authorizationHash(auth));
+  const noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs);
+  const auth: Authorization = cancel
+    ? { operation: "CANCEL_REFUND", base: { ...base(invitation.vaultId, invitation.ownerKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId } }
+    : { operation: "CLAIM", base: { ...base(invitation.vaultId, invitation.successorKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId }, requested_at: vault.requestedAt, claim_after: vault.claimAfter };
+  const signature = roleKey.sign(authorizationHash(auth));
   const signedArgs = { ...sentinelArgs, ...signature };
-  const signedPrepared = await ready.prepare(buildClaimActions(CONTRACT, ready.address, signedArgs), false);
+  const signedPrepared = await ready.prepare(actionBuilder(CONTRACT, ready.address, signedArgs), false);
   const facts = signedPrepared.proof.proof_facts;
   if (!Array.isArray(facts) || facts.length < 6) throw new Error("Ready returned incomplete proof facts.");
   const proofBlockNumber = BigInt(facts[4]!);
@@ -268,7 +280,7 @@ export async function prepareClaimPackage(input: {
     pool: POOL,
     contract: CONTRACT,
     proofBaseBlock: { number: facts[4]!, hash: facts[5]! },
-    kind: PrivateAction.Claim,
+    kind,
     sentinelArgs,
     sentinelPrepared,
     signedNoteId: noteId,
@@ -279,7 +291,7 @@ export async function prepareClaimPackage(input: {
   const body: Record<string, unknown> = {
     schema: "afterlight-prepared-neutral-exit/1",
     evidence: "APPLICATION_AUTHORIZED_OUTER_UNSIGNED_NOT_SUBMITTED",
-    action: "CLAIM",
+    action,
     chainId: CHAIN_ID,
     neutralAddress: "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46",
     afterlightAddress: CONTRACT,
@@ -287,9 +299,9 @@ export async function prepareClaimPackage(input: {
     tokenAddress: STRK,
     amountFri: AMOUNT_FRI,
     vaultId: invitation.vaultId,
-    expectedState: "2",
+    expectedState,
     expectedEpoch: vault.epoch,
-    expectedRoleNonce: vault.successorNonce,
+    expectedRoleNonce: expectedNonce,
     destinationNoteId: noteId,
     validUntil: expiry,
     preparedAtBlock,
@@ -306,8 +318,8 @@ export async function prepareClaimPackage(input: {
   return Object.freeze({ ...body, locks: Object.freeze(locks) });
 }
 
-export async function submitClaimPackage(
-  claimPackage: Readonly<Record<string, unknown>>,
+export async function submitExitPackage(
+  exitPackage: Readonly<Record<string, unknown>>,
 ): Promise<{ transactionHash: string; actualFeeFri?: string }> {
   const response = await fetch(`${RELAYER_URL}/v1/exit`, {
     method: "POST",
@@ -315,7 +327,7 @@ export async function submitClaimPackage(
       "content-type": "application/json",
       "x-afterlight-intent": "claim-exit",
     },
-    body: JSON.stringify(claimPackage),
+    body: JSON.stringify(exitPackage),
     cache: "no-store",
     credentials: "omit",
     referrerPolicy: "no-referrer",
@@ -327,14 +339,14 @@ export async function submitClaimPackage(
   };
   if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash) {
     const reason = body.code === "exit_unavailable"
-      ? "The neutral claim sponsor is temporarily unavailable. No recovery was submitted."
+      ? "The neutral private-exit sponsor is temporarily unavailable. No settlement was submitted."
       : body.code === "exit_busy"
-        ? "A claim is already being processed. Refresh the vault before trying again."
-        : body.code === "exit_reverted"
-          ? "The recovery was refused by the Afterlight contract. Refresh the vault state."
+        ? "A private exit is already being processed. Refresh the vault before trying again."
+      : body.code === "exit_reverted"
+          ? "The private exit was refused by the Afterlight contract. Refresh the vault state."
           : body.code === "exit_uncertain"
-            ? "The claim submission needs receipt reconciliation. Do not retry yet."
-            : "The exact-note claim package was rejected. No recovery was submitted.";
+            ? "The private exit needs receipt reconciliation. Do not retry yet."
+            : "The exact-note private exit was rejected. No settlement was submitted.";
     throw new Error(reason);
   }
   return {

@@ -32,7 +32,7 @@ describe("Afterlight Phase A relay Worker", () => {
     const body = await response.text();
     expect(body).toContain('"status":"ok"');
     expect(body).toContain('"submission":"disabled"');
-    expect(body).toContain('"claimCapacity":{"status":"unknown","reason":"configuration"}');
+    expect(body).toContain('"claimCapacity":{"status":"unknown","reason":"configuration","fundingStatus":"unknown","fundingReason":"configuration"}');
     expect(body).toContain('"payloadLogging":false');
     expect(body).not.toMatch(/private_key|wallet_address|ip_address|relayer_account/i);
     expect(body).not.toMatch(/secretConfigured|maxSponsoredFee|dailySponsorBudget|"limits"/i);

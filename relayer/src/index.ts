@@ -28,7 +28,7 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedClaim, ExitExecutorError, readClaimCapacity, validatePreparedClaimPayload } from "./exit-executor.js";
+import { executePreparedExit, ExitExecutorError, readClaimCapacity, validatePreparedExitPayload } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
 
@@ -67,13 +67,13 @@ export default {
         requireExitHeaders(request, env);
         await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
-        const validated = validatePreparedClaimPayload(payload);
+        const validated = validatePreparedExitPayload(payload);
         await rateLimitValidatedExit(env, validated.bindingSha256);
         if (!isSubmissionEnabled(env.SUBMIT_ENABLED)) throw new RelayHttpError(503, "submission_disabled");
         const readiness = executorReadiness(env);
         if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-        const result = await executePreparedClaim(payload, env, budget, validated);
+        const result = await executePreparedExit(payload, env, budget, validated);
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
@@ -212,7 +212,7 @@ async function health(request: Request, env: Env): Promise<Response> {
           true,
         ),
     submitDisabled || !readiness.executable
-      ? Promise.resolve({ status: "unknown" as const, reason: "configuration" as const })
+      ? Promise.resolve({ status: "unknown" as const, reason: "configuration" as const, fundingStatus: "unknown" as const, fundingReason: "configuration" as const })
       : readClaimCapacity(env),
   ]);
   const ready = !submitDisabled && readiness.executable && balance.status === "ok";

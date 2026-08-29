@@ -74,6 +74,8 @@ export type ExitResult = Readonly<{
 export type ClaimCapacity = Readonly<{
   status: "ready" | "exhausted" | "unknown";
   reason: "ready" | "allowance" | "balance" | "configuration";
+  fundingStatus: "ready" | "exhausted" | "unknown";
+  fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
 }>;
 
 export async function readClaimCapacity(env: Env): Promise<ClaimCapacity> {
@@ -84,49 +86,63 @@ export async function readClaimCapacity(env: Env): Promise<ClaimCapacity> {
       plugins: false,
     });
     const latest = await provider.getBlockWithTxHashes("latest");
-    if (!("block_number" in latest)) return { status: "unknown", reason: "configuration" };
+    if (!("block_number" in latest)) return unknownCapacity();
     const block = latest.block_number;
     const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) =>
       provider.callContract({ contractAddress, entrypoint, calldata }, block);
-    const [poolClass, neutralClass, balanceRaw, allowanceRaw, feeRaw, collectorRaw] = await Promise.all([
+    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw] = await Promise.all([
       provider.getClassHashAt(POOL, block),
       provider.getClassHashAt(NEUTRAL, block),
+      provider.getClassHashAt(AFTERLIGHT, block),
       call(TOKEN, "balance_of", [NEUTRAL]),
       call(TOKEN, "allowance", [NEUTRAL, POOL]),
+      call(AFTERLIGHT, "get_locked_by_token", [TOKEN]),
       call(POOL, "get_fee_amount"),
       call(POOL, "get_fee_collector"),
     ]);
     if (
       normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH) ||
       normalizeHex(neutralClass) !== normalizeHex(EXIT_POLICY.neutralClassHash) ||
+      normalizeHex(afterlightClass) !== normalizeHex(EXIT_POLICY.afterlightClassHash) ||
       normalizeHex(collectorRaw[0] ?? "0x0") !== normalizeHex(EXIT_POLICY.poolFeeCollector)
-    ) return { status: "unknown", reason: "configuration" };
+    ) return unknownCapacity();
     const fee = BigInt(feeRaw[0] ?? -1);
-    if (fee !== BigInt(EXIT_POLICY.poolFeeEachFri)) return { status: "unknown", reason: "configuration" };
+    if (fee !== BigInt(EXIT_POLICY.poolFeeEachFri)) return unknownCapacity();
     const allowance = parseU256Result(allowanceRaw, "allowance");
-    if (allowance !== fee) return { status: "exhausted", reason: "allowance" };
+    if (allowance !== BigInt(EXIT_POLICY.initialPoolAllowanceFri)) return exhaustedCapacity("allowance");
     const balance = parseU256Result(balanceRaw, "balance");
     const required = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri) + BigInt(EXIT_POLICY.postSpendHealthFloorFri);
-    if (balance < required) return { status: "exhausted", reason: "balance" };
-    return { status: "ready", reason: "ready" };
+    if (balance < required) return exhaustedCapacity("balance");
+    const liability = parseU256Result(liabilityRaw, "liability");
+    return liability === 0n
+      ? { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" }
+      : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
   } catch {
-    return { status: "unknown", reason: "configuration" };
+    return unknownCapacity();
   }
 }
 
-export function validatePreparedClaimPayload(payload: string): ValidatedExit {
+function unknownCapacity(): ClaimCapacity {
+  return { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration" };
+}
+
+function exhaustedCapacity(reason: "allowance" | "balance"): ClaimCapacity {
+  return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+}
+
+export function validatePreparedExitPayload(payload: string): ValidatedExit {
   let decoded: unknown;
   try { decoded = JSON.parse(payload); } catch { throw new ExitExecutorError("invalid_exit"); }
   try {
     const validated = validatePreparedExitPackage(decoded, EXIT_POLICY);
-    if (validated.action !== "CLAIM") throw new Error("only_claim_is_public");
+    if (validated.action !== "CLAIM" && validated.action !== "CANCEL_REFUND") throw new Error("unsupported_exit");
     return validated;
   } catch { throw new ExitExecutorError("invalid_exit"); }
 }
 
-export async function executePreparedClaim(payload: string, env: Env, budget: BudgetCoordinator, prevalidated?: ValidatedExit): Promise<ExitResult> {
+export async function executePreparedExit(payload: string, env: Env, budget: BudgetCoordinator, prevalidated?: ValidatedExit): Promise<ExitResult> {
   if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
-  const validated = prevalidated ?? validatePreparedClaimPayload(payload);
+  const validated = prevalidated ?? validatePreparedExitPayload(payload);
 
   // The binding is already a domain-separated SHA-256 over the complete exit
   // package. Budget keys deliberately accept only canonical 64-hex digests.
@@ -146,7 +162,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
       prior.transactionHash !== null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
-      return reconcileSubmittedClaim(provider, budget, validated, prior.transactionHash);
+      return reconcileSubmittedExit(provider, budget, validated, prior.transactionHash);
     }
     return { status: "duplicate", transactionHash: prior.transactionHash };
   }
@@ -276,7 +292,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     submissionStage = "mark_submitted";
     await budget.markSubmitted(semanticKey, validated.bindingSha256, transactionHash, Date.now());
     submissionStage = "receipt";
-    return await reconcileSubmittedClaim(provider, budget, validated, transactionHash);
+    return await reconcileSubmittedExit(provider, budget, validated, transactionHash);
   } catch (error) {
     if (!broadcastStarted) {
       try {
@@ -294,7 +310,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   }
 }
 
-export async function reconcileSubmittedClaim(
+export async function reconcileSubmittedExit(
   provider: RpcProvider,
   budget: BudgetCoordinator,
   validated: ValidatedExit,

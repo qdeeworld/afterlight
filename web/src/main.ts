@@ -4,7 +4,7 @@ import { RELAYER_URL, STRK } from "./config.ts";
 import { assertMainnet, readLiability, readVault } from "./chain.ts";
 import { parseInvitation, stateName, type RecoveryInvitation, type Role, type VaultSnapshot, type WalletStatus } from "./model.ts";
 import { connectReady, detectReady, type ReadySession } from "./wallet.ts";
-import { exportKey, fundRecoveryDrill, generateKey, prepareClaimPackage, relayControl, restoreKey, submitClaimPackage } from "./operations.ts";
+import { exportKey, fundRecoveryReserve, generateKey, prepareExitPackage, relayControl, restoreKey, submitExitPackage } from "./operations.ts";
 import type { LocalStarkKey } from "../../client/src/keys.ts";
 
 let role: Role = (new URL(location.href).searchParams.get("role") === "successor") ? "successor" : "owner";
@@ -20,7 +20,9 @@ let busy = false;
 let transactionHash = "";
 let costAcknowledged = false;
 let claimRetryBlocked = false;
-let claimCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
+let exitCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
+let fundingCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
+let reserveMode: "NORMAL" | "FAST_DEMO" = "NORMAL";
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("Afterlight app root is missing.");
@@ -38,6 +40,21 @@ function strk(value: bigint): string {
   const whole = value / 10n ** 18n;
   const fraction = (value % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
   return `${whole}${fraction ? `.${fraction.slice(0, 4)}` : ""} STRK`;
+}
+
+function assertInvitationMatchesVault(invitation: RecoveryInvitation, snapshot: VaultSnapshot): void {
+  const mode = invitation.mode === "NORMAL" ? "0" : "1";
+  for (const [label, observed, expected] of [
+    ["owner key", snapshot.ownerKey, invitation.ownerKey],
+    ["successor key", snapshot.successorKey, invitation.successorKey],
+    ["token", snapshot.token, STRK],
+    ["amount", snapshot.amount, 10n ** 18n],
+    ["mode", snapshot.mode, mode],
+    ["inactivity", snapshot.inactivitySeconds, invitation.inactivitySeconds],
+    ["grace", snapshot.graceSeconds, invitation.graceSeconds],
+  ] as const) {
+    if (num.toHex(BigInt(observed)) !== num.toHex(BigInt(expected))) throw new Error(`Invitation ${label} does not match Mainnet state.`);
+  }
 }
 
 function progressStep(label: string, detail: string, complete: boolean, current: boolean): string {
@@ -96,21 +113,21 @@ function walletRow(): string {
 
 function ownerView(): string {
   const invitation = parseInvitation(invitationText);
-  const canFund = claimCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey);
+  const canFund = fundingCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey);
   const liveControls = invitation.valid && vault?.exists;
   return `<section class="journey" aria-labelledby="owner-heading">
-    <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">Recovery Drill · 1 STRK</span></div>
+    <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"} · 1 STRK</span></div>
     <p class="lede">Privately set aside 1 STRK. Heartbeat while active and veto a recovery request during grace.</p>
     ${journeyProgress()}
     ${walletRow()}
     ${keyPanel("owner")}
-    <form id="reserve-form" class="setup-form"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>The live drill uses fixed, contract-enforced terms.</p></div></div>
-      <fieldset><legend class="sr-only">Recovery Drill terms</legend><div class="choice selected"><span><strong>1 STRK reserve</strong><small>Fixed by the deployed contract</small></span></div><div class="choice selected"><span><strong>5 min inactivity + 5 min grace</strong><small>Short Mainnet demonstration mode</small></span></div></fieldset>
+    <form id="reserve-form" class="setup-form"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>Both modes use fixed, contract-enforced terms.</p></div></div>
+      <fieldset><legend>Choose a timing mode</legend><label class="choice ${reserveMode === "NORMAL" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="NORMAL" ${reserveMode === "NORMAL" ? "checked" : ""} /><span><strong>30 days + 7 days</strong><small>Long-term inactivity and grace</small></span></label><label class="choice ${reserveMode === "FAST_DEMO" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="FAST_DEMO" ${reserveMode === "FAST_DEMO" ? "checked" : ""} /><span><strong>5 min + 5 min</strong><small>Clearly labelled Recovery Drill</small></span></label></fieldset>
       <label class="full-field"><span>Designated successor public key</span><input name="successor-key" autocomplete="off" spellcheck="false" placeholder="0x…" value="${escapeHtml(successorPublicKey)}" /><small>The successor must generate this independently. Do not accept their secret.</small></label>
-      <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this drill uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction.</p></aside>
+      <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this reserve uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction.</p></aside>
       <label class="ack"><input name="cost-ack" type="checkbox" ${costAcknowledged ? "checked" : ""} /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
-      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${claimCapacity === "exhausted" ? "New reserves temporarily paused" : claimCapacity === "checking" ? "Checking recovery capacity" : "Create and privately fund reserve"}</button>
-      ${claimCapacity === "exhausted" ? `<p class="error">New reserves are paused until the neutral claim capacity is replenished. Existing vault controls remain available.</p>` : claimCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
+      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : "Create and privately fund reserve"}</button>
+      ${fundingCapacity === "exhausted" ? `<p class="error">A reserve is already outstanding or private-exit capacity needs replenishment. New funding stays paused; existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
     </form>
     ${invitation.valid ? controlPanel(invitation.invitation, liveControls ? vault : undefined) : ""}
@@ -134,7 +151,8 @@ function invitationPanel(parsed: ReturnType<typeof parseInvitation>): string {
   if (!parsed.valid) {
     return `<section class="invitation-panel"><div class="section-heading"><span class="step-number">02</span><div><strong>Verify the recovery invitation</strong><p>Paste the package received from the owner.</p></div></div>${editor}<div class="invitation-result" data-valid="false"><strong>Waiting for a valid invitation</strong><p>${escapeHtml(parsed.reason)}</p></div></section>`;
   }
-  return `<section class="invitation-panel verified"><div class="section-heading"><span class="step-number">02</span><div><strong>Invitation verified</strong><p>Contract, designated key and recovery terms match Afterlight Mainnet.</p></div><span class="verified-mark">Verified</span></div><div class="invitation-facts"><span><small>Vault</small><strong>${short(parsed.invitation.vaultId)}</strong></span><span><small>Reserve</small><strong>1 STRK</strong></span><span><small>Timing</small><strong>5 + 5 min</strong></span></div><details class="invitation-editor"><summary>Replace invitation</summary>${editor}</details></section>`;
+  const timing = parsed.invitation.mode === "NORMAL" ? "30 days + 7 days" : "5 + 5 min drill";
+  return `<section class="invitation-panel verified"><div class="section-heading"><span class="step-number">02</span><div><strong>Invitation verified</strong><p>Contract, designated key and recovery terms match Afterlight Mainnet.</p></div><span class="verified-mark">Verified</span></div><div class="invitation-facts"><span><small>Vault</small><strong>${short(parsed.invitation.vaultId)}</strong></span><span><small>Reserve</small><strong>1 STRK</strong></span><span><small>Timing</small><strong>${timing}</strong></span></div><details class="invitation-editor"><summary>Replace invitation</summary>${editor}</details></section>`;
 }
 
 function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot): string {
@@ -153,10 +171,10 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
   const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note." : "The reserve returned privately to its owner.";
   return `<section class="control-panel live-state" data-vault-state="${current}"><div class="control-heading"><div><span class="state-chip">${current}</span><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
-    ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button>` : ""}
+    ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || exitCapacity !== "ready" || busy ? "disabled" : ""}>Cancel and return 1 STRK privately</button>${exitCapacity !== "ready" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     ${role === "owner" && current === "GRACE" ? `<button class="button primary" data-control="VETO" ${!applicationKey || busy ? "disabled" : ""}>Veto recovery</button>` : ""}
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!applicationKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
-    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && !claimRetryBlocked ? "" : "disabled"} data-action="claim">${claimRetryBlocked ? "Claim awaiting reconciliation" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>` : ""}
+    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && exitCapacity === "ready" && !claimRetryBlocked ? "" : "disabled"} data-action="claim">${claimRetryBlocked ? "Claim awaiting reconciliation" : exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     <p class="action-help">Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
   </section>`;
 }
@@ -246,11 +264,15 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>("[name=successor-key]")?.addEventListener("input", (event) => {
     successorPublicKey = (event.currentTarget as HTMLInputElement).value.trim();
     const submit = document.querySelector<HTMLButtonElement>("#reserve-form button[type=submit]");
-    if (submit) submit.disabled = !(claimCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey));
+    if (submit) submit.disabled = !(fundingCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey));
   });
   document.querySelector<HTMLInputElement>("[name=cost-ack]")?.addEventListener("change", (event) => {
     costAcknowledged = (event.currentTarget as HTMLInputElement).checked;
   });
+  document.querySelectorAll<HTMLInputElement>("[name=reserve-mode]").forEach((input) => input.addEventListener("change", () => {
+    reserveMode = input.value === "FAST_DEMO" ? "FAST_DEMO" : "NORMAL";
+    render();
+  }));
   document.querySelector<HTMLTextAreaElement>("[name=invitation]")?.addEventListener("input", (event) => {
     invitationText = (event.currentTarget as HTMLTextAreaElement).value;
     localStorage.setItem("afterlight:invitation:v1", invitationText);
@@ -261,12 +283,12 @@ function bindEvents(): void {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
     void run(async () => {
-      if (claimCapacity !== "ready") throw new Error("New recovery reserves are paused until claim capacity is verified and replenished.");
+      if (fundingCapacity !== "ready") throw new Error("New recovery reserves are paused until funding capacity is verified and available.");
       if (!form.has("cost-ack") || !costAcknowledged) throw new Error("Confirm the exact 7 STRK private-wallet consequence first.");
       if (!ready || !applicationKey) throw new Error("Connect Ready X and generate the owner key first.");
       if (privateBalance === undefined || privateBalance < 7n * 10n ** 18n) throw new Error("At least 7 private STRK is required.");
       notice = "Requesting a fresh neutral funding checkpoint…"; render();
-      const result = await fundRecoveryDrill({ ready, ownerKey: applicationKey, successorKey: successorPublicKey,
+      const result = await fundRecoveryReserve({ ready, ownerKey: applicationKey, successorKey: successorPublicKey, mode: reserveMode,
         onCheckpoint: (hash) => { transactionHash = hash; notice = "Checkpoint succeeded. Confirm the single private FUND transaction in Ready X."; render(); },
         onSubmitted: (hash) => { transactionHash = hash; notice = "Private FUND submitted. Waiting for Mainnet success…"; render(); },
       });
@@ -284,7 +306,7 @@ function bindEvents(): void {
     if (!parsed.valid) throw new Error(parsed.reason);
     vault = await readVault(parsed.invitation.vaultId);
     if (!vault.exists) throw new Error("This vault does not exist on the deployed Afterlight contract.");
-    if (num.toHex(BigInt(vault.successorKey)) !== num.toHex(BigInt(parsed.invitation.successorKey))) throw new Error("Invitation successor key does not match Mainnet state.");
+    assertInvitationMatchesVault(parsed.invitation, vault);
     notice = `Live vault loaded: ${stateName(vault.state)}.`;
   })));
   document.querySelectorAll<HTMLButtonElement>("[data-control]").forEach((button) => button.addEventListener("click", () => void run(async () => {
@@ -295,16 +317,36 @@ function bindEvents(): void {
     vault = await readVault(parsed.invitation.vaultId);
     notice = `${operation === "HEARTBEAT" ? "Heartbeat recorded" : operation === "REQUEST" ? "Recovery grace opened" : "Recovery vetoed"}. Mainnet state is now ${stateName(vault.state)}.`;
   })));
+  document.querySelector<HTMLButtonElement>("[data-action=cancel-refund]")?.addEventListener("click", () => {
+    if (!window.confirm("Cancel this reserve and return its 1 STRK principal to this Ready X private balance? This cannot be undone.")) return;
+    void run(async () => {
+    const parsed = parseInvitation(invitationText);
+    if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated owner key first.");
+    if (exitCapacity !== "ready") throw new Error("Private cancellation is paused until sponsor exit capacity is restored.");
+    const balanceBefore = await ready.balance(STRK);
+    notice = "Ready X will prepare one exact private return note. The neutral sponsor pays the pool and network fees."; render();
+    const exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CANCEL_REFUND" });
+    notice = "Owner authorization and exact return note verified. Submitting through the neutral sponsor…"; render();
+    const result = await submitExitPackage(exitPackage);
+    transactionHash = result.transactionHash;
+    vault = await readVault(parsed.invitation.vaultId);
+    privateBalance = await ready.balance(STRK);
+    if (vault.state !== "4") throw new Error("The transaction succeeded but the vault is not CANCELLED. Do not retry.");
+    if (privateBalance !== balanceBefore + 1n * 10n ** 18n) throw new Error("The vault is CANCELLED, but the expected 1 STRK shielded-balance increase is not visible yet. Refresh Ready X; do not retry.");
+      notice = `Reserve returned privately. Your shielded balance increased from ${strk(balanceBefore)} to ${strk(privateBalance)}.`;
+    });
+  });
   document.querySelector<HTMLButtonElement>("[data-action=claim]")?.addEventListener("click", () => void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated successor key first.");
+    if (exitCapacity !== "ready") throw new Error("Private recovery is paused until sponsor exit capacity is restored.");
     const balanceBefore = await ready.balance(STRK);
     notice = "Ready X will prepare the exact private destination twice, then the neutral sponsor will submit it. The sponsor pays the pool and network fees."; render();
-    const claimPackage = await prepareClaimPackage({ ready, invitation: parsed.invitation, vault, successorKey: applicationKey });
+    const claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CLAIM" });
     notice = "Exact destination and designated-key authorization verified. Submitting through the neutral sponsor…"; render();
     let result;
     try {
-      result = await submitClaimPackage(claimPackage);
+      result = await submitExitPackage(claimPackage);
     } catch (error) {
       if (error instanceof Error && error.message.includes("needs receipt reconciliation")) claimRetryBlocked = true;
       throw error;
@@ -324,10 +366,12 @@ void run(async () => {
   await readLiability();
   try {
     const response = await fetch(`${RELAYER_URL}/health`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-    const body = await response.json() as { claimCapacity?: { status?: string } };
-    claimCapacity = body.claimCapacity?.status === "ready" ? "ready" : body.claimCapacity?.status === "exhausted" ? "exhausted" : "unknown";
+    const body = await response.json() as { claimCapacity?: { status?: string; fundingStatus?: string } };
+    exitCapacity = body.claimCapacity?.status === "ready" ? "ready" : body.claimCapacity?.status === "exhausted" ? "exhausted" : "unknown";
+    fundingCapacity = body.claimCapacity?.fundingStatus === "ready" ? "ready" : body.claimCapacity?.fundingStatus === "exhausted" ? "exhausted" : "unknown";
   } catch {
-    claimCapacity = "unknown";
+    exitCapacity = "unknown";
+    fundingCapacity = "unknown";
   }
   const detection = detectReady();
   walletStatus = detection.found ? "available" : "missing";

@@ -55,13 +55,13 @@ Every remote or wallet-dependent region needs loading, empty, error, wrong-netwo
 
 ## Components
 
-The unauthenticated primary action is “Create a recovery reserve.” Owner setup progressively reveals Ready X connection, reserve mode and denomination, inactivity and grace periods, the successor public key, recovery-package backup, and private funding. Do not expose later actions before their prerequisites are satisfied.
+The unauthenticated primary action is “Create a recovery reserve.” Owner setup progressively reveals Ready X connection, realistic `NORMAL` timing or clearly labelled `FAST_DEMO` timing, denomination, the successor public key, recovery-package backup, and private funding. Do not expose later actions before their prerequisites are satisfied.
 
 Vault status presents `ACTIVE`, `GRACE`, `CLAIMED`, or `CANCELLED` in plain language together with the relevant heartbeat, request, grace, or terminal outcome. Pair the machine state with a human result such as “Reserve protected,” “Owner still has control,” or “Recovery complete.” Do not use color alone to distinguish states.
 
 When an invitation validates, collapse its raw JSON into a compact summary of vault, reserve and timing. Keep replacement available through progressive disclosure. Never make raw JSON the largest element in a successful journey.
 
-Owner controls expose heartbeat, veto, and private cancellation only when valid. Successor controls expose key generation, invitation import, request, exact destination-note preparation, and claim only when valid. Explain why an action is unavailable instead of leaving a dead control.
+Owner controls expose heartbeat, veto, and exact-note private cancellation only when valid. Cancellation requires an explicit irreversible-action confirmation and the restored owner key. Successor controls expose key generation, invitation import, request, exact destination-note preparation, and claim only when valid. Explain why an action is unavailable instead of leaving a dead control.
 
 Wallet reviews must repeat the expected role, network, token, amount, privacy consequence, and fee boundary immediately before confirmation. After an action, show the useful result first and place its receipt, contract address, and transaction hash in a contextual expandable region.
 

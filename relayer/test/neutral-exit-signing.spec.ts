@@ -13,9 +13,10 @@ import {
   assertOuterSignatureMatchesHash,
   assertSignedExitTransaction,
   buildExitLocks,
+  validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, classifyBroadcastFailure, executePreparedClaim, reconcileSubmittedClaim } from "../src/exit-executor.js";
+import { EXIT_POLICY, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
@@ -60,7 +61,27 @@ describe("neutral exact-exit signing boundary", () => {
     expect(() => validatePreparedExitPackage(wrongPoolClass, EXIT_POLICY)).toThrow(/proof_output_shape/);
   });
 
-  it("reconciles an already-submitted claim instead of leaving the nonce lane blocked", async () => {
+  it("accepts the same exact-note boundary for an owner-authorized cancellation", () => {
+    const cancellation = structuredClone(preparedClaimPackage());
+    cancellation.action = "CANCEL_REFUND";
+    cancellation.expectedState = "1";
+    cancellation.prepared.call.calldata[15] = "1";
+    cancellation.prepared.call.calldata[19] = "1";
+    cancellation.prepared.proof.output[16] = "1";
+    cancellation.prepared.proof.output[20] = "1";
+    cancellation.locks = buildExitLocks(cancellation);
+    expect(validatePreparedExitPackage(cancellation, EXIT_POLICY).action).toBe("CANCEL_REFUND");
+  });
+
+  it("admits exactly one bounded claim or cancellation from the same replenished allowance", () => {
+    const readyAllowance = 12n * 10n ** 18n;
+    const exhaustedAllowance = 6n * 10n ** 18n;
+    expect(validateAllowanceForAction("CLAIM", readyAllowance)).toBe(exhaustedAllowance);
+    expect(validateAllowanceForAction("CANCEL_REFUND", readyAllowance)).toBe(exhaustedAllowance);
+    expect(() => validateAllowanceForAction("CLAIM", exhaustedAllowance)).toThrow(/wrong_exact_pool_allowance/);
+  });
+
+  it("reconciles an already-submitted private exit instead of leaving the nonce lane blocked", async () => {
     const transactionHash = "0xabc";
     const binding = "a".repeat(64);
     const provider = {
@@ -73,7 +94,7 @@ describe("neutral exact-exit signing boundary", () => {
     const budget = {
       finalize: vi.fn().mockResolvedValue({ outcome: "committed" }),
     } as any;
-    await expect(reconcileSubmittedClaim(provider, budget, { bindingSha256: binding } as any, transactionHash)).resolves.toEqual({
+    await expect(reconcileSubmittedExit(provider, budget, { bindingSha256: binding } as any, transactionHash)).resolves.toEqual({
       status: "accepted",
       transactionHash,
       actualFeeFri: "70",
@@ -82,7 +103,7 @@ describe("neutral exact-exit signing boundary", () => {
   });
 
   it("does not enter claim validation or signing when the deployment kill switch is off", async () => {
-    await expect(executePreparedClaim("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "exit_unavailable" });
+    await expect(executePreparedExit("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "exit_unavailable" });
   });
 
   it("signs the real proof facts and reconstructs the exact outer hash offline", async () => {
