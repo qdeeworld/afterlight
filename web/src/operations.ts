@@ -31,7 +31,7 @@ import type { RecoveryInvitation, VaultSnapshot } from "./model.ts";
 import type { ReadySession } from "./wallet.ts";
 import { TransactionExecutionError, waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
-import { isRetryableCheckpointCode } from "./checkpoint-policy.ts";
+import { isHashlessRelayedResult, isRetryableCheckpointCode } from "./checkpoint-policy.ts";
 
 export function generateKey(): LocalStarkKey {
   return LocalStarkKey.generate();
@@ -107,8 +107,11 @@ async function checkpoint(): Promise<string> {
       const body = await response.json() as {
         status?: string;
         code?: string;
-        result?: { status?: string; transactionHash?: string };
+        result?: { status?: string; transactionHash?: string | null };
       };
+      if (isHashlessRelayedResult(body.status, body.result?.status, body.result?.transactionHash)) {
+        throw new Error("checkpoint_ambiguous");
+      }
       if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash || !["accepted", "duplicate"].includes(String(body.result.status))) {
         if (isRetryableCheckpointCode(body.code)) {
           throw new Error("checkpoint_ambiguous");
@@ -352,10 +355,17 @@ export async function submitExitPackage(
   const body = await response.json() as {
     status?: string;
     code?: string;
-    result?: { transactionHash?: string | null; actualFeeFri?: string };
+    result?: { status?: string; transactionHash?: string | null; actualFeeFri?: string };
   };
+  const hashlessRelayedResult = isHashlessRelayedResult(
+    body.status,
+    body.result?.status,
+    body.result?.transactionHash,
+  );
   if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash) {
-    const reason = body.code === "exit_unavailable"
+    const reason = hashlessRelayedResult
+      ? "The neutral sponsor retained this exact private exit but has not returned its transaction hash. Reconcile this same package; do not prepare another exit."
+      : body.code === "exit_unavailable"
       ? "The neutral private-exit sponsor is temporarily unavailable. No settlement was submitted."
       : body.code === "exit_busy"
         ? "A private exit is already being processed. Refresh the vault before trying again."
@@ -364,7 +374,11 @@ export async function submitExitPackage(
           : body.code === "exit_uncertain"
             ? "The private exit needs receipt reconciliation. Do not retry yet."
             : "The exact-note private exit was rejected. No settlement was submitted.";
-    throw new ExitSubmissionError(reason, body.code, ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""));
+    throw new ExitSubmissionError(
+      reason,
+      body.code,
+      hashlessRelayedResult || ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""),
+    );
   }
   const transactionHash = num.toHex(BigInt(body.result.transactionHash));
   try {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT } from "../src/config.ts";
-import { isRetryableCheckpointCode } from "../src/checkpoint-policy.ts";
+import { isHashlessRelayedResult, isRetryableCheckpointCode } from "../src/checkpoint-policy.ts";
 import { isCompatibleReadyVersion } from "../src/compatibility.ts";
 import { parseInvitation } from "../src/model.ts";
 
@@ -49,9 +49,16 @@ describe("public product compatibility", () => {
   it.each([
     "internal_error",
     "receipt_unreconciled",
+    "receipt_reverted",
     "relayer_busy",
+    "fee_policy_rejected",
     "simulation_failed",
+    "simulation_mismatch",
+    "signer_adapter_unavailable",
+    "sponsorship_frozen",
+    "sponsorship_invariant_breach",
     "submission_mismatch",
+    "submission_not_started",
     "submission_uncertain",
   ])("retains the owner-bound checkpoint token for retryable %s outcomes", (code) => {
     expect(isRetryableCheckpointCode(code)).toBe(true);
@@ -63,4 +70,18 @@ describe("public product compatibility", () => {
       expect(isRetryableCheckpointCode(code)).toBe(false);
     },
   );
+
+  it.each(["accepted", "duplicate"])(
+    "retains exact retry state for a hashless relayed %s result",
+    (status) => {
+      expect(isHashlessRelayedResult("relayed", status, null)).toBe(true);
+      expect(isHashlessRelayedResult("relayed", status, undefined)).toBe(true);
+    },
+  );
+
+  it("does not classify terminal hashes or malformed responses as hashless relays", () => {
+    expect(isHashlessRelayedResult("relayed", "duplicate", "0x123")).toBe(false);
+    expect(isHashlessRelayedResult("error", "duplicate", null)).toBe(false);
+    expect(isHashlessRelayedResult("relayed", "reverted", null)).toBe(false);
+  });
 });
