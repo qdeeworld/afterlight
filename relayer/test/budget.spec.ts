@@ -84,6 +84,18 @@ describe("deployment-wide sponsorship coordinator", () => {
     });
   });
 
+  it("keeps control and exit daily totals separate while sharing one nonce lane", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput(semantic, exact, "60", dayOne, 1, "exit"));
+    await budget.markSubmitted(semantic, exact, "0xabc", 2);
+    await budget.finalize(semantic, exact, "0xabc", "60", "succeeded", 3);
+
+    const controlSemantic = "d".repeat(64);
+    expect((await budget.reserve(reserveInput(controlSemantic, alternateExact, "20", dayOne, 4, "control"))).outcome).toBe("reserved");
+    expect(await budget.snapshot(dayOne, "exit")).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "60" });
+    expect(await budget.snapshot(dayOne, "control")).toMatchObject({ reservedTodayFri: "20", spentTodayFri: "0" });
+  });
+
   it("admits only one active Starknet nonce lane at a time", async () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput());
@@ -178,8 +190,10 @@ function reserveInput(
   maxFeeFri = "100",
   dayKey = dayOne,
   nowMs = 1,
+  budgetClass: "control" | "exit" = "control",
 ) {
   return {
+    budgetClass,
     dayKey,
     semanticKey,
     exactFingerprint,

@@ -33,7 +33,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 
 1. Run `npm ci`, `npm run types`, `npm run check`, and `npm audit` on the exact commit.
 2. For a new environment, keep `SUBMIT_ENABLED=false`; deploy the Worker and Durable Object migration.
-3. Verify `/health` reports the intended submission state and exposes no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
+3. Verify `/health` reports the intended submission state and collapsed claim-capacity state, while exposing no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
 4. Verify the configured-origin preflight and each route with empty or invalid requests only.
 5. Fund the bounded relayer account within the approved spike cap.
 6. Install secrets, verify configuration readiness, and obtain fresh no-submit quotes.
@@ -46,6 +46,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 - One relayer account has one active nonce lane. A `RESERVED` or `SUBMITTED` operation blocks a different sponsored operation until it is released or finalized.
 - A timed-out receipt remains `SUBMITTED`; its full maximum stays reserved.
 - Retry only the exact original request. The executor reuses its stored transaction hash and reconciles the receipt without simulating, signing, or broadcasting again.
+- RPC duplicate and unknown-result errors are transport-ambiguous, never proof of rejection. Keep their reservations locked until receipt and nonce evidence resolves them.
 - A request with the same semantic operation but different signature, expiry, or exact fingerprint cannot reconcile the submitted transaction.
 - Never release a submitted reservation based only on an RPC timeout. Confirm the transaction or account nonce before any manual recovery.
 - A receipt fee above its reservation records the full spend and freezes all new sponsorship.
@@ -63,6 +64,7 @@ promotion; a green inert check is never production readiness evidence.
 Monitor through at least 2026-09-04:
 
 - `/health` availability and collapsed balance status;
+- `/health.claimCapacity`; stop new reserves whenever it is not `ready`. A zero pool allowance after a completed claim is an intentional exhausted state until one newly reviewed, bounded allowance is provisioned.
 - relayer public STRK balance below the configured threshold;
 - Durable Object sponsorship freeze state;
 - reservations remaining `RESERVED` or `SUBMITTED` beyond the receipt window;
@@ -76,6 +78,11 @@ separate `7.5 STRK` full resource-bounds ceiling, a separate exact `6 STRK`
 pool allowance, and a `1 STRK` post-spend balance floor. Replace any cap only
 from fresh quotes; never enable exposure larger than the funded operational
 bound.
+
+Control and exit spend use separate UTC-day totals because their policy ceilings
+are intentionally different. They still share the same reservation table and
+single active nonce lane; splitting accounting does not permit concurrent
+broadcasts from the neutral account.
 
 Do not log request bodies, signatures, IP addresses, wallet addresses,
 application keys, vault IDs, transaction fingerprints, RPC authorization, or

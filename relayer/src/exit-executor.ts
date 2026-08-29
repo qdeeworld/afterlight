@@ -1,6 +1,7 @@
 import { Account, RpcProvider, transaction, type Call } from "starknet";
 import type { BudgetCoordinator } from "./executor.js";
 import {
+  LOCKED_POOL_CLASS_HASH,
   addResourceMargins,
   assertOuterSignatureMatchesHash,
   assertProofFreshness,
@@ -20,7 +21,7 @@ import {
   type ValidatedExit,
 } from "./neutral-exit-policy.mjs";
 
-const EXIT_POLICY = Object.freeze({
+export const EXIT_POLICY = Object.freeze({
   schema: "afterlight-neutral-exit-policy/1",
   chainId: "0x534e5f4d41494e",
   neutralAddress: "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46",
@@ -70,23 +71,66 @@ export type ExitResult = Readonly<{
   actualFeeFri?: string;
 }>;
 
-export async function executePreparedClaim(payload: string, env: Env, budget: BudgetCoordinator): Promise<ExitResult> {
+export type ClaimCapacity = Readonly<{
+  status: "ready" | "exhausted" | "unknown";
+  reason: "ready" | "allowance" | "balance" | "configuration";
+}>;
+
+export async function readClaimCapacity(env: Env): Promise<ClaimCapacity> {
+  try {
+    const provider = new RpcProvider({
+      nodeUrl: env.EXIT_RPC_URL,
+      headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
+      plugins: false,
+    });
+    const latest = await provider.getBlockWithTxHashes("latest");
+    if (!("block_number" in latest)) return { status: "unknown", reason: "configuration" };
+    const block = latest.block_number;
+    const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) =>
+      provider.callContract({ contractAddress, entrypoint, calldata }, block);
+    const [poolClass, neutralClass, balanceRaw, allowanceRaw, feeRaw, collectorRaw] = await Promise.all([
+      provider.getClassHashAt(POOL, block),
+      provider.getClassHashAt(NEUTRAL, block),
+      call(TOKEN, "balance_of", [NEUTRAL]),
+      call(TOKEN, "allowance", [NEUTRAL, POOL]),
+      call(POOL, "get_fee_amount"),
+      call(POOL, "get_fee_collector"),
+    ]);
+    if (
+      normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH) ||
+      normalizeHex(neutralClass) !== normalizeHex(EXIT_POLICY.neutralClassHash) ||
+      normalizeHex(collectorRaw[0] ?? "0x0") !== normalizeHex(EXIT_POLICY.poolFeeCollector)
+    ) return { status: "unknown", reason: "configuration" };
+    const fee = BigInt(feeRaw[0] ?? -1);
+    if (fee !== BigInt(EXIT_POLICY.poolFeeEachFri)) return { status: "unknown", reason: "configuration" };
+    const allowance = parseU256Result(allowanceRaw, "allowance");
+    if (allowance !== fee) return { status: "exhausted", reason: "allowance" };
+    const balance = parseU256Result(balanceRaw, "balance");
+    const required = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri) + BigInt(EXIT_POLICY.postSpendHealthFloorFri);
+    if (balance < required) return { status: "exhausted", reason: "balance" };
+    return { status: "ready", reason: "ready" };
+  } catch {
+    return { status: "unknown", reason: "configuration" };
+  }
+}
+
+export function validatePreparedClaimPayload(payload: string): ValidatedExit {
   let decoded: unknown;
   try { decoded = JSON.parse(payload); } catch { throw new ExitExecutorError("invalid_exit"); }
-  let validated: ValidatedExit;
   try {
-    validated = validatePreparedExitPackage(decoded, EXIT_POLICY);
+    const validated = validatePreparedExitPackage(decoded, EXIT_POLICY);
     if (validated.action !== "CLAIM") throw new Error("only_claim_is_public");
+    return validated;
   } catch { throw new ExitExecutorError("invalid_exit"); }
+}
+
+export async function executePreparedClaim(payload: string, env: Env, budget: BudgetCoordinator, prevalidated?: ValidatedExit): Promise<ExitResult> {
+  if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
+  const validated = prevalidated ?? validatePreparedClaimPayload(payload);
 
   // The binding is already a domain-separated SHA-256 over the complete exit
   // package. Budget keys deliberately accept only canonical 64-hex digests.
   const semanticKey = validated.bindingSha256;
-  const prior = await budget.lookup(semanticKey);
-  if (prior.outcome === "found" && prior.state !== "released") {
-    return { status: "duplicate", transactionHash: prior.transactionHash };
-  }
-
   const provider = new RpcProvider({
     // Real Ready PROOF1 exit envelopes require the audited RPC 0.10.3 path.
     // Keep its credential-bearing URL in a Worker secret rather than the
@@ -95,6 +139,17 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
     plugins: false,
   });
+  const prior = await budget.lookup(semanticKey);
+  if (prior.outcome === "found" && prior.state !== "released") {
+    if (
+      prior.state === "submitted" &&
+      prior.transactionHash !== null &&
+      prior.exactFingerprint === validated.bindingSha256
+    ) {
+      return reconcileSubmittedClaim(provider, budget, validated, prior.transactionHash);
+    }
+    return { status: "duplicate", transactionHash: prior.transactionHash };
+  }
   try {
     if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new Error("wrong_chain");
   } catch { throw exitStage("chain"); }
@@ -152,6 +207,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   } catch { throw exitStage("fee_and_balance"); }
 
   const reservation = await budget.reserve({
+    budgetClass: "exit",
     dayKey: new Date().toISOString().slice(0, 10),
     semanticKey,
     exactFingerprint: validated.bindingSha256,
@@ -220,17 +276,7 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     submissionStage = "mark_submitted";
     await budget.markSubmitted(semanticKey, validated.bindingSha256, transactionHash, Date.now());
     submissionStage = "receipt";
-    const receipt = await provider.waitForTransaction(transactionHash, { retries: 45, retryInterval: 2_000 });
-    if (receipt.isError()) throw new ExitExecutorError("exit_uncertain");
-    const raw = receipt.value as unknown as Record<string, unknown>;
-    const fee = readFee(raw.actual_fee);
-    if (receipt.isReverted()) {
-      await budget.finalize(semanticKey, validated.bindingSha256, transactionHash, fee, "reverted", Date.now());
-      throw new ExitExecutorError("exit_reverted");
-    }
-    submissionStage = "finalize";
-    await budget.finalize(semanticKey, validated.bindingSha256, transactionHash, fee, "succeeded", Date.now());
-    return { status: "accepted", transactionHash, actualFeeFri: fee };
+    return await reconcileSubmittedClaim(provider, budget, validated, transactionHash);
   } catch (error) {
     if (!broadcastStarted) {
       try {
@@ -248,11 +294,37 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   }
 }
 
+export async function reconcileSubmittedClaim(
+  provider: RpcProvider,
+  budget: BudgetCoordinator,
+  validated: ValidatedExit,
+  transactionHash: string,
+): Promise<ExitResult> {
+  let receipt;
+  try {
+    receipt = await provider.waitForTransaction(transactionHash, { retries: 45, retryInterval: 2_000 });
+  } catch {
+    throw new ExitExecutorError("exit_uncertain");
+  }
+  if (receipt.isError()) throw new ExitExecutorError("exit_uncertain");
+  const raw = receipt.value as unknown as Record<string, unknown>;
+  const observedHash = typeof raw.transaction_hash === "string" ? normalizeHex(raw.transaction_hash) : transactionHash;
+  if (observedHash !== normalizeHex(transactionHash)) throw new ExitExecutorError("exit_uncertain");
+  const fee = readFee(raw.actual_fee);
+  if (receipt.isReverted()) {
+    await budget.finalize(validated.bindingSha256, validated.bindingSha256, transactionHash, fee, "reverted", Date.now());
+    throw new ExitExecutorError("exit_reverted");
+  }
+  await budget.finalize(validated.bindingSha256, validated.bindingSha256, transactionHash, fee, "succeeded", Date.now());
+  return { status: "accepted", transactionHash, actualFeeFri: fee };
+}
+
 async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blockNumber: bigint, timestamp: bigint) {
   const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) => provider.callContract({ contractAddress, entrypoint, calldata }, Number(blockNumber));
-  const [neutralClass, afterlightClass, nonce, balanceRaw, allowanceRaw, feeRaw, collectorRaw, validityRaw, vaultRaw] = await Promise.all([
+  const [neutralClass, afterlightClass, poolClass, nonce, balanceRaw, allowanceRaw, feeRaw, collectorRaw, validityRaw, vaultRaw] = await Promise.all([
     provider.getClassHashAt(NEUTRAL, Number(blockNumber)),
     provider.getClassHashAt(AFTERLIGHT, Number(blockNumber)),
+    provider.getClassHashAt(POOL, Number(blockNumber)),
     provider.getNonceForAddress(NEUTRAL, Number(blockNumber)),
     call(TOKEN, "balance_of", [NEUTRAL]),
     call(TOKEN, "allowance", [NEUTRAL, POOL]),
@@ -261,7 +333,11 @@ async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blo
     call(POOL, "get_proof_validity_blocks"),
     call(AFTERLIGHT, "get_vault", [hex(validated.metadata.vaultId)]),
   ]);
-  if (normalizeHex(neutralClass) !== normalizeHex(EXIT_POLICY.neutralClassHash) || normalizeHex(afterlightClass) !== normalizeHex(EXIT_POLICY.afterlightClassHash)) throw new ExitExecutorError("exit_unavailable");
+  if (
+    normalizeHex(neutralClass) !== normalizeHex(EXIT_POLICY.neutralClassHash) ||
+    normalizeHex(afterlightClass) !== normalizeHex(EXIT_POLICY.afterlightClassHash) ||
+    normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH)
+  ) throw new ExitExecutorError("exit_unavailable");
   if (BigInt(feeRaw[0] ?? -1) !== 6n * 10n ** 18n || normalizeHex(collectorRaw[0] ?? "0x0") !== normalizeHex(EXIT_POLICY.poolFeeCollector)) throw new ExitExecutorError("exit_unavailable");
   const allowance = parseU256Result(allowanceRaw, "allowance");
   validateAllowanceForAction(validated.action, allowance);
@@ -314,7 +390,7 @@ function rpcErrorCode(error: unknown): number | undefined {
 }
 
 export function classifyBroadcastFailure(error: unknown): Readonly<{
-  category: "rpc_execution" | "rpc_transaction_nonce" | "rpc_validate_resources" | "rpc_account_balance" | "rpc_validation" | "rpc_other" | "transport_or_unknown";
+  category: "rpc_execution" | "rpc_transaction_nonce" | "rpc_validate_resources" | "rpc_account_balance" | "rpc_validation" | "rpc_duplicate" | "rpc_other" | "transport_or_unknown";
   definitiveReject: boolean;
 }> {
   const code = rpcErrorCode(error);
@@ -323,6 +399,7 @@ export function classifyBroadcastFailure(error: unknown): Readonly<{
   if (code === 53) return { category: "rpc_validate_resources", definitiveReject: true };
   if (code === 54) return { category: "rpc_account_balance", definitiveReject: true };
   if (code === 55) return { category: "rpc_validation", definitiveReject: true };
-  if (code !== undefined) return { category: "rpc_other", definitiveReject: true };
+  if (code === 59) return { category: "rpc_duplicate", definitiveReject: false };
+  if (code !== undefined) return { category: "rpc_other", definitiveReject: false };
   return { category: "transport_or_unknown", definitiveReject: false };
 }

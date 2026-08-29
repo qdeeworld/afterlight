@@ -14,7 +14,7 @@ inert packaging and health tests.
 - Mainnet chain configuration is explicit in every relay plan; Cairo signatures independently bind the chain.
 - Bounded streaming body read; an advertised or observed oversized body is rejected.
 - Cloudflare Rate Limiting bindings for both per-vault/operation and global abuse control. Keys are hashes, never client IP addresses.
-- A deterministic fee policy that caps each transaction and the daily exposure. It reserves the transaction maximum, not the optimistic quote.
+- A deterministic fee policy that caps each transaction and the daily exposure. It reserves the transaction maximum, not the optimistic quote. Control calls and private exits have separate daily ledgers while sharing one serialized account-nonce lane.
 - One deployment-wide SQLite Durable Object. Semantic operation identities survive UTC rollover while reserve/spend totals remain day-bucketed.
 - Separate semantic and exact-call fingerprints: changing only expiry or signature cannot create a second operation, while simulation, submission, and receipts must still match the exact calldata.
 - Atomic `RESERVED → SUBMITTED(tx hash) → COMMITTED | REVERTED | BREACHED` reconciliation. Simulation failure spends nothing; a proven pre-submit failure releases; ambiguous receipt state remains submitted with its hash; reverted transactions remain terminal.
@@ -25,7 +25,9 @@ inert packaging and health tests.
 - Starknet v3 simulation freezes the nonce and exact resource bounds. The budget reserves a larger policy maximum; signing reuses the frozen bounds without estimating again and rejects encoded exposure above the reservation.
 - Submitted and mined account transactions are reconciled against the neutral account and exact Cairo execute calldata before the receipt is accepted.
 - `POST /v1/checkpoint` builds the permissionless `sync_funding_checkpoint` call with no request body, wallet, vault, note, or signature identifier. A global 15-second idempotency bucket and dedicated rate limiter bound sponsorship.
-- `POST /v1/exit` accepts only a designated-key-authorized `CLAIM` package from the configured product origin. It locks the exact pool call, proof data/output/facts, application signature, destination note, live vault state, classes, allowance, balance, resource quote, and outer transaction hash before one broadcast.
+- `POST /v1/exit` accepts only a designated-key-authorized `CLAIM` package from the configured product origin. It locks the exact three-action pool call (`WriteOnce`, `EmitOpenNoteCreated`, `Invoke`), canonical note storage write, proof data/output/facts, pinned pool class, application signature, destination note, live vault state, allowance, balance, resource quote, and outer transaction hash before one broadcast.
+- `SUBMIT_ENABLED=false` disables checkpoint, control, and exit broadcasts. A retry of a stored `SUBMITTED` exit only reconciles its existing hash; it never signs or broadcasts again. Duplicate and unknown RPC errors remain ambiguous and keep the reservation locked.
+- `/health` exposes a collapsed `claimCapacity` state. The product refuses new funding unless the live neutral balance and exact pool allowance can cover one bounded claim plus the health floor.
 
 ## Production configuration
 

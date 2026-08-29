@@ -64,7 +64,10 @@ Relayer availability is operationally important but not trusted for correctness.
 | Owner veto races a mature claim | First valid included transition wins; the other sees changed state |
 | Failed token/pool settlement leaves false state | Cairo transaction rollback restores state and liability |
 | Tokens are donated directly to the helper | No administrative withdrawal exists; donated surplus remains inert and cannot change locked liabilities |
-| Relayer drains sponsorship | Schema limits, expiry, rate limits, per-call cap, daily budget, nonce serialization, and breach freeze |
+| Relayer drains sponsorship | Schema limits, expiry, validation before scarce per-vault rate limiting, separate control/exit daily caps, shared nonce serialization, and breach freeze |
+| Prepared proof swaps the pool implementation or adds actions | Pinned live pool class plus an exact `WriteOnce → EmitOpenNoteCreated → Invoke` action sequence and canonical destination-note storage write |
+| Ambiguous broadcast is retried or released | `SUBMITTED` retains its hash and reservation; duplicate/unknown RPC results reconcile without signing or rebroadcasting |
+| Product creates a reserve the sponsor cannot settle | Live claim-capacity health check; funding fails closed unless exact allowance, balance, exit cap, and health floor reconcile |
 | Application logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from application logs; infrastructure metadata remains a separate limit |
 
 ## Relayer and hosting metadata boundary

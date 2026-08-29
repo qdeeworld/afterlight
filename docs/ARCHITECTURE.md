@@ -25,6 +25,11 @@ resource quote, then signs and broadcasts the outer transaction once. The
 contract and pool remain authoritative; package preparation alone is not
 execution evidence.
 
+The sponsor independently pins the live STRK20 pool class and permits exactly
+`WriteOnce`, `EmitOpenNoteCreated`, then `Invoke`. The first action must write
+the canonical packed token value to the storage key derived from the signed
+destination note. Extra actions or writes fail before signing.
+
 ```text
 Ready X + STRK20 pool
   |-- FUND ------------------------------> Afterlight liability + ACTIVE vault
@@ -70,6 +75,11 @@ held token balance >= existing locked liabilities + new fixed reserve
 ```
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
+
+The public product also reads the sponsor's collapsed claim-capacity status.
+It disables new funding unless one claim is covered by the exact pool allowance,
+the bounded outer fee, and the post-spend health floor. This is an availability
+guard, not an authorization primitive; the contract and pool remain final.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or

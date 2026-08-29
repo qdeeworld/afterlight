@@ -28,7 +28,7 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedClaim, ExitExecutorError } from "./exit-executor.js";
+import { executePreparedClaim, ExitExecutorError, readClaimCapacity, validatePreparedClaimPayload } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
 
@@ -41,7 +41,7 @@ export default {
     const requestOrigin = request.headers.get("origin") ?? "";
     try {
       if (request.method === "GET" && url.pathname === HEALTH_PATH) {
-        return health(env);
+        return health(request, env);
       }
       if (request.method === "OPTIONS" && url.pathname === RELAY_PATH) {
         return preflight(request, env);
@@ -65,10 +65,15 @@ export default {
       let estimateOnly = false;
       if (url.pathname === EXIT_PATH) {
         requireExitHeaders(request, env);
-        await rateLimitExit(env);
+        await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
+        const validated = validatePreparedClaimPayload(payload);
+        await rateLimitValidatedExit(env, validated.bindingSha256);
+        if (!isSubmissionEnabled(env.SUBMIT_ENABLED)) throw new RelayHttpError(503, "submission_disabled");
+        const readiness = executorReadiness(env);
+        if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-        const result = await executePreparedClaim(payload, env, budget);
+        const result = await executePreparedClaim(payload, env, budget, validated);
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
@@ -195,18 +200,23 @@ function executorErrorCode(error: unknown): ExecutorError["code"] | undefined {
     : undefined;
 }
 
-async function health(env: Env): Promise<Response> {
+async function health(request: Request, env: Env): Promise<Response> {
   const submitDisabled = !isSubmissionEnabled(env.SUBMIT_ENABLED);
   const readiness = executorReadiness(env);
-  const balance =
+  const [balance, claimCapacity] = await Promise.all([
     submitDisabled || !readiness.executable
       ? assessBalanceHealth(undefined, env.MIN_RELAYER_BALANCE_FRI, !submitDisabled)
       : await readBalanceHealth(
           createStarknetRelayAdapter(env),
           env.MIN_RELAYER_BALANCE_FRI,
           true,
-        );
+        ),
+    submitDisabled || !readiness.executable
+      ? Promise.resolve({ status: "unknown" as const, reason: "configuration" as const })
+      : readClaimCapacity(env),
+  ]);
   const ready = !submitDisabled && readiness.executable && balance.status === "ok";
+  const origin = request.headers.get("origin");
   return jsonResponse(
     {
       status: submitDisabled ? "ok" : ready ? "ok" : "degraded",
@@ -215,6 +225,7 @@ async function health(env: Env): Promise<Response> {
       submission: submitDisabled ? "disabled" : "enabled",
       executor: readiness,
       balance,
+      claimCapacity,
       privacy: {
         payloadLogging: false,
         appKeysHeld: false,
@@ -222,6 +233,7 @@ async function health(env: Env): Promise<Response> {
       },
     },
     submitDisabled || ready ? 200 : 503,
+    isAllowedOrigin(origin, env.ALLOWED_ORIGIN) ? corsHeaders(origin ?? "") : undefined,
   );
 }
 
@@ -257,12 +269,12 @@ function requireExitHeaders(request: Request, env: Env): void {
   if (contentType !== "application/json") throw new RelayHttpError(415, "invalid_content_type");
 }
 
-async function rateLimitExit(env: Env): Promise<void> {
-  const [globalOutcome, exitOutcome] = await Promise.all([
-    env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" }),
-    env.EXIT_RATE_LIMITER.limit({ key: "afterlight-claim-exit-global-v1" }),
-  ]);
-  if (!globalOutcome.success || !exitOutcome.success) {
-    throw new RelayHttpError(429, "rate_limited");
-  }
+async function rateLimitExitIngress(env: Env): Promise<void> {
+  const outcome = await env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" });
+  if (!outcome.success) throw new RelayHttpError(429, "rate_limited");
+}
+
+async function rateLimitValidatedExit(env: Env, bindingSha256: string): Promise<void> {
+  const outcome = await env.EXIT_RATE_LIMITER.limit({ key: bindingSha256 });
+  if (!outcome.success) throw new RelayHttpError(429, "rate_limited");
 }

@@ -24,11 +24,15 @@ describe("Afterlight Phase A relay Worker", () => {
   });
 
   it("reports structured health without secret, wallet, IP or account material", async () => {
-    const response = await exports.default.fetch("https://relay.invalid/health");
+    const response = await exports.default.fetch(new Request("https://relay.invalid/health", {
+      headers: { origin },
+    }));
     expect(response.status).toBe(200);
+    expect(response.headers.get("access-control-allow-origin")).toBe(origin);
     const body = await response.text();
     expect(body).toContain('"status":"ok"');
     expect(body).toContain('"submission":"disabled"');
+    expect(body).toContain('"claimCapacity":{"status":"unknown","reason":"configuration"}');
     expect(body).toContain('"payloadLogging":false');
     expect(body).not.toMatch(/private_key|wallet_address|ip_address|relayer_account/i);
     expect(body).not.toMatch(/secretConfigured|maxSponsoredFee|dailySponsorBudget|"limits"/i);

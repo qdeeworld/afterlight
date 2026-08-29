@@ -89,7 +89,7 @@ export interface BudgetCoordinator {
     execution: "succeeded" | "reverted",
     nowMs: number,
   ): Promise<BudgetMutationResult>;
-  snapshot(dayKey: string): Promise<BudgetSnapshot>;
+  snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
 }
 
 export type ExecutorPolicy = Readonly<{
@@ -209,6 +209,7 @@ export async function executeRelayPlan(
   let reservation: BudgetReserveResult;
   try {
     reservation = await budget.reserve({
+      budgetClass: "control",
       dayKey,
       semanticKey: plan.semanticKey,
       exactFingerprint: plan.fingerprint,

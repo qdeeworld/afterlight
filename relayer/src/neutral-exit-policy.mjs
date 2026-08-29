@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { ec, hash } from "starknet";
+import { constants, ec, hash } from "starknet";
 
 export const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 export const LOCKED_NEUTRAL_ADDRESS =
@@ -10,6 +10,8 @@ export const LOCKED_AFTERLIGHT_ADDRESS =
   "0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25";
 export const LOCKED_POOL_ADDRESS =
   "0x040337b1af3c663e86e333bab5a4b28da8d4652a15a69beee2b677776ffe812a";
+export const LOCKED_POOL_CLASS_HASH =
+  "0x067dddd89d80fedadc06b6f160798f94800a4a70164e5a24301cd0d6076b554d";
 export const LOCKED_POOL_FEE_COLLECTOR =
   "0x0d79041634625e5288296fbc648088788710ba44903a3a49468a66567749e77";
 export const LOCKED_TOKEN_ADDRESS =
@@ -21,6 +23,7 @@ export const LOCKED_NEUTRAL_CLASS_HASH =
 export const LOCKED_AMOUNT_FRI = 1_000_000_000_000_000_000n;
 export const LOCKED_POOL_FEE_FRI = 6_000_000_000_000_000_000n;
 export const LOCKED_INITIAL_ALLOWANCE_FRI = 12_000_000_000_000_000_000n;
+export const OPEN_NOTE_PACKED_VALUE = 1n << 128n;
 export const LOCKED_HEALTH_FLOOR_FRI = 1_000_000_000_000_000_000n;
 export const ABSOLUTE_NETWORK_CAP_PER_EXIT_FRI = 9_027_538_581_262_736_234n;
 export const MAX_ESTIMATE_AGE_BLOCKS = 300n;
@@ -411,13 +414,15 @@ export function validatePreparedExitPackage(input, policy) {
   if (call.contractAddress !== normalizeHex(LOCKED_POOL_ADDRESS)) throw new Error("wrong_pool_call");
   if (call.entrypoint !== "apply_actions") throw new Error("wrong_pool_entrypoint");
   const parsed = parseServerActions(call.calldata);
-  const allowedVariants = new Set([0n, 1n, 7n, 10n]);
-  if (parsed.actions.some((item) => !allowedVariants.has(item.variant))) {
-    throw new Error("unexpected_value_or_event_action");
-  }
+  const exactVariants = [0n, 7n, 10n];
+  if (
+    parsed.actions.length !== exactVariants.length ||
+    parsed.actions.some((item, index) => item.variant !== exactVariants[index])
+  ) throw new Error("exit_requires_exact_write_note_invoke_shape");
+  const writes = parsed.actions.filter((item) => item.variant === 0n);
   const notes = parsed.actions.filter((item) => item.variant === 7n);
   const invokes = parsed.actions.filter((item) => item.variant === 10n);
-  if (notes.length !== 1 || invokes.length !== 1) throw new Error("exit_action_cardinality");
+  if (writes.length !== 1 || notes.length !== 1 || invokes.length !== 1) throw new Error("exit_action_cardinality");
   const note = notes[0];
   if (
     normalizeHex(`0x${note.fields[3].toString(16)}`) !== normalizeHex(LOCKED_TOKEN_ADDRESS) ||
@@ -425,6 +430,18 @@ export function validatePreparedExitPackage(input, policy) {
   ) {
     throw new Error("open_note_token_or_id_mismatch");
   }
+  const write = writes[0];
+  const noteId = BigInt(metadata.destinationNoteId);
+  const expectedStorageAddress = BigInt(
+    hash.computePedersenHash(hash.starknetKeccak("notes"), noteId),
+  ) % constants.ADDR_BOUND;
+  if (
+    write.fields.length !== 4 ||
+    write.fields[0] !== expectedStorageAddress ||
+    write.fields[1] !== 2n ||
+    write.fields[2] !== OPEN_NOTE_PACKED_VALUE ||
+    normalizeHex(`0x${write.fields[3].toString(16)}`) !== normalizeHex(LOCKED_TOKEN_ADDRESS)
+  ) throw new Error("wrong_open_note_write_once");
   const invoke = invokes[0];
   if (note.index >= invoke.index) throw new Error("open_note_must_precede_invoke");
   if (normalizeHex(`0x${invoke.fields[0].toString(16)}`) !== normalizeHex(LOCKED_AFTERLIGHT_ADDRESS)) {
@@ -453,7 +470,10 @@ export function validatePreparedExitPackage(input, policy) {
   if (typeof proof !== "object" || proof === null) throw new Error("missing_prepared_proof");
   const proofBytes = decodeCanonicalProofData(proof.data);
   const proofOutput = feltArray(proof.output, "proof_output").map(BigInt);
-  if (proofOutput.length !== parsed.serializedActions.length + 1 || proofOutput[0] === 0n) {
+  if (
+    proofOutput.length !== parsed.serializedActions.length + 1 ||
+    normalizeHex(`0x${proofOutput[0].toString(16)}`) !== normalizeHex(LOCKED_POOL_CLASS_HASH)
+  ) {
     throw new Error("proof_output_shape");
   }
   for (let index = 0; index < parsed.serializedActions.length; index += 1) {

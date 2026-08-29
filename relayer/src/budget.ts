@@ -9,6 +9,7 @@ export type ReservationState =
   | "breached";
 
 export type BudgetReserveInput = Readonly<{
+  budgetClass: "control" | "exit";
   dayKey: string;
   semanticKey: string;
   exactFingerprint: string;
@@ -106,6 +107,7 @@ export class BudgetError extends Error {
 
 type ReservationRow = Readonly<{
   semantic_key: string;
+  budget_class: "control" | "exit";
   exact_fingerprint: string;
   day_key: string;
   max_fee_fri: string;
@@ -155,6 +157,28 @@ export class RelayBudget extends DurableObject<Env> {
       );
       CREATE INDEX IF NOT EXISTS reservations_day_status
       ON reservations (day_key, status);
+
+      CREATE TABLE IF NOT EXISTS class_daily_totals (
+        budget_class TEXT NOT NULL CHECK (budget_class IN ('control', 'exit')),
+        day_key TEXT NOT NULL,
+        reserved_fri TEXT NOT NULL,
+        spent_fri TEXT NOT NULL,
+        PRIMARY KEY (budget_class, day_key)
+      );
+    `);
+    const reservationColumns = this.ctx.storage.sql
+      .exec<{ name: string }>("PRAGMA table_info(reservations)")
+      .toArray();
+    if (!reservationColumns.some(({ name }) => name === "budget_class")) {
+      this.ctx.storage.sql.exec(
+        "ALTER TABLE reservations ADD COLUMN budget_class TEXT NOT NULL DEFAULT 'control' CHECK (budget_class IN ('control', 'exit'))",
+      );
+    }
+    // Preserve all exposure from the pre-class ledger conservatively as
+    // control spend. This migration never resets an existing daily ceiling.
+    this.ctx.storage.sql.exec(`
+      INSERT OR IGNORE INTO class_daily_totals (budget_class, day_key, reserved_fri, spent_fri)
+      SELECT 'control', day_key, reserved_fri, spent_fri FROM daily_totals
     `);
   }
 
@@ -178,7 +202,7 @@ export class RelayBudget extends DurableObject<Env> {
     const exact = validKey(exactFingerprint);
     const rows = this.ctx.storage.sql
       .exec<ReservationRow>(
-        `SELECT semantic_key, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
+        `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
                 status, transaction_hash
          FROM reservations
          WHERE exact_fingerprint = ? AND status IN ('RESERVED', 'SUBMITTED')`,
@@ -203,7 +227,7 @@ export class RelayBudget extends DurableObject<Env> {
       if (existing !== undefined && existing.status !== "RELEASED") {
         return reserveResult(
           duplicateOutcome(existing.status),
-          this.readTotals(existing.day_key),
+          this.readTotals(existing.budget_class, existing.day_key),
           this.isFrozen(),
         );
       }
@@ -217,7 +241,7 @@ export class RelayBudget extends DurableObject<Env> {
       // exposure prevents two requests from signing the same pending nonce.
       if (active !== 0) throw new BudgetError("relayer_busy");
 
-      const totals = this.readTotals(normalized.dayKey);
+      const totals = this.readTotals(normalized.budgetClass, normalized.dayKey);
       const maximum = BigInt(normalized.maxFeeFri);
       if (maximum > BigInt(normalized.perCallCapFri)) throw new BudgetError("per_call_cap");
       const projected = BigInt(totals.reserved_fri) + BigInt(totals.spent_fri) + maximum;
@@ -226,10 +250,11 @@ export class RelayBudget extends DurableObject<Env> {
       if (existing === undefined) {
         this.ctx.storage.sql.exec(
           `INSERT INTO reservations
-             (semantic_key, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
+             (semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
               status, transaction_hash, updated_at_ms)
-           VALUES (?, ?, ?, ?, NULL, 'RESERVED', NULL, ?)`,
+           VALUES (?, ?, ?, ?, ?, NULL, 'RESERVED', NULL, ?)`,
           normalized.semanticKey,
+          normalized.budgetClass,
           normalized.exactFingerprint,
           normalized.dayKey,
           normalized.maxFeeFri,
@@ -238,9 +263,10 @@ export class RelayBudget extends DurableObject<Env> {
       } else {
         this.ctx.storage.sql.exec(
           `UPDATE reservations
-           SET exact_fingerprint = ?, day_key = ?, max_fee_fri = ?, actual_fee_fri = NULL,
+           SET budget_class = ?, exact_fingerprint = ?, day_key = ?, max_fee_fri = ?, actual_fee_fri = NULL,
                status = 'RESERVED', transaction_hash = NULL, updated_at_ms = ?
            WHERE semantic_key = ?`,
+          normalized.budgetClass,
           normalized.exactFingerprint,
           normalized.dayKey,
           normalized.maxFeeFri,
@@ -252,7 +278,7 @@ export class RelayBudget extends DurableObject<Env> {
         reserved_fri: (BigInt(totals.reserved_fri) + maximum).toString(),
         spent_fri: totals.spent_fri,
       };
-      this.writeTotals(normalized.dayKey, next);
+      this.writeTotals(normalized.budgetClass, normalized.dayKey, next);
       return reserveResult("reserved", next, false);
     });
   }
@@ -269,7 +295,7 @@ export class RelayBudget extends DurableObject<Env> {
     const timestamp = validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
-      const totals = this.readTotals(row.day_key);
+      const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
       if (row.status === "SUBMITTED") {
         if (row.transaction_hash !== hash) throw new BudgetError("idempotency_conflict");
@@ -296,7 +322,7 @@ export class RelayBudget extends DurableObject<Env> {
     const timestamp = validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
-      const totals = this.readTotals(row.day_key);
+      const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
       if (row.status === "RELEASED") return mutationResult("already_released", totals, this.isFrozen());
       const terminal = terminalMutationOutcome(row.status);
@@ -309,7 +335,7 @@ export class RelayBudget extends DurableObject<Env> {
         timestamp,
         semantic,
       );
-      this.writeTotals(row.day_key, next);
+      this.writeTotals(row.budget_class, row.day_key, next);
       return mutationResult("released", next, this.isFrozen());
     });
   }
@@ -332,7 +358,7 @@ export class RelayBudget extends DurableObject<Env> {
     }
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
-      const totals = this.readTotals(row.day_key);
+      const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
       if (row.status === "COMMITTED" || row.status === "REVERTED" || row.status === "BREACHED") {
         if (row.transaction_hash !== hash || row.actual_fee_fri !== actualFee.toString()) {
@@ -368,7 +394,7 @@ export class RelayBudget extends DurableObject<Env> {
         timestamp,
         semantic,
       );
-      this.writeTotals(row.day_key, next);
+      this.writeTotals(row.budget_class, row.day_key, next);
       if (breached) {
         this.ctx.storage.sql.exec(
           "UPDATE sponsorship_control SET frozen = 1, frozen_at_ms = ? WHERE singleton = 1",
@@ -383,12 +409,14 @@ export class RelayBudget extends DurableObject<Env> {
     });
   }
 
-  snapshot(dayKey: string): BudgetSnapshot {
+  snapshot(dayKey: string, budgetClass: "control" | "exit" = "control"): BudgetSnapshot {
     const day = validDay(dayKey);
-    const totals = this.readTotals(day);
+    const kind = validBudgetClass(budgetClass);
+    const totals = this.readTotals(kind, day);
     const counts = this.ctx.storage.sql
       .exec<{ status: string; count: number }>(
-        "SELECT status, COUNT(*) AS count FROM reservations WHERE day_key = ? GROUP BY status",
+        "SELECT status, COUNT(*) AS count FROM reservations WHERE budget_class = ? AND day_key = ? GROUP BY status",
+        kind,
         day,
       )
       .toArray();
@@ -407,21 +435,23 @@ export class RelayBudget extends DurableObject<Env> {
     };
   }
 
-  private readTotals(dayKey: string): TotalsRow {
+  private readTotals(budgetClass: "control" | "exit", dayKey: string): TotalsRow {
     return this.ctx.storage.sql
       .exec<TotalsRow>(
-        "SELECT reserved_fri, spent_fri FROM daily_totals WHERE day_key = ?",
+        "SELECT reserved_fri, spent_fri FROM class_daily_totals WHERE budget_class = ? AND day_key = ?",
+        budgetClass,
         dayKey,
       )
       .toArray()[0] ?? { reserved_fri: "0", spent_fri: "0" };
   }
 
-  private writeTotals(dayKey: string, totals: TotalsRow): void {
+  private writeTotals(budgetClass: "control" | "exit", dayKey: string, totals: TotalsRow): void {
     this.ctx.storage.sql.exec(
-      `INSERT INTO daily_totals (day_key, reserved_fri, spent_fri)
-       VALUES (?, ?, ?)
-       ON CONFLICT(day_key) DO UPDATE
+      `INSERT INTO class_daily_totals (budget_class, day_key, reserved_fri, spent_fri)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(budget_class, day_key) DO UPDATE
        SET reserved_fri = excluded.reserved_fri, spent_fri = excluded.spent_fri`,
+      budgetClass,
       dayKey,
       totals.reserved_fri,
       totals.spent_fri,
@@ -431,7 +461,7 @@ export class RelayBudget extends DurableObject<Env> {
   private readReservation(semanticKey: string): ReservationRow | undefined {
     return this.ctx.storage.sql
       .exec<ReservationRow>(
-        `SELECT semantic_key, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
+        `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
                 status, transaction_hash
          FROM reservations WHERE semantic_key = ?`,
         semanticKey,
@@ -458,6 +488,7 @@ export class RelayBudget extends DurableObject<Env> {
 
 function validateReserveInput(input: BudgetReserveInput): BudgetReserveInput {
   return {
+    budgetClass: validBudgetClass(input.budgetClass),
     dayKey: validDay(input.dayKey),
     semanticKey: validKey(input.semanticKey),
     exactFingerprint: validKey(input.exactFingerprint),
@@ -466,6 +497,11 @@ function validateReserveInput(input: BudgetReserveInput): BudgetReserveInput {
     dailyBudgetFri: decimal(input.dailyBudgetFri).toString(),
     nowMs: validTimestamp(input.nowMs),
   };
+}
+
+function validBudgetClass(value: string): "control" | "exit" {
+  if (value !== "control" && value !== "exit") throw new BudgetError("invalid_budget_input");
+  return value;
 }
 
 function externalState(status: ReservationRow["status"]): ReservationState {
