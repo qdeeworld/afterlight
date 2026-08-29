@@ -19,6 +19,7 @@ let notice = "Loading the live Starknet Mainnet product…";
 let busy = false;
 let transactionHash = "";
 let costAcknowledged = false;
+let claimRetryBlocked = false;
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("Afterlight app root is missing.");
@@ -122,7 +123,7 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
     ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button>` : ""}
     ${role === "owner" && current === "GRACE" ? `<button class="button primary" data-control="VETO" ${!applicationKey || busy ? "disabled" : ""}>Veto recovery</button>` : ""}
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!applicationKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
-    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey ? "" : "disabled"} data-action="claim">${claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>` : ""}
+    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && !claimRetryBlocked ? "" : "disabled"} data-action="claim">${claimRetryBlocked ? "Claim awaiting reconciliation" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>` : ""}
     <p class="action-help">Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
   </section>`;
 }
@@ -266,7 +267,13 @@ function bindEvents(): void {
     notice = "Ready X will prepare the exact private destination twice, then the neutral sponsor will submit it. The sponsor pays the pool and network fees."; render();
     const claimPackage = await prepareClaimPackage({ ready, invitation: parsed.invitation, vault, successorKey: applicationKey });
     notice = "Exact destination and designated-key authorization verified. Submitting through the neutral sponsor…"; render();
-    const result = await submitClaimPackage(claimPackage);
+    let result;
+    try {
+      result = await submitClaimPackage(claimPackage);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("needs receipt reconciliation")) claimRetryBlocked = true;
+      throw error;
+    }
     transactionHash = result.transactionHash;
     vault = await readVault(parsed.invitation.vaultId);
     privateBalance = await ready.balance(STRK);

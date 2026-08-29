@@ -197,7 +197,21 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
     const expectedHash = assertOuterSignatureMatchesHash(signed);
     submissionStage = "broadcast";
     broadcastStarted = true;
-    const response = await provider.invokeSignedTx(signed);
+    let response;
+    try {
+      response = await provider.invokeSignedTx(signed);
+    } catch (error) {
+      const failure = classifyBroadcastFailure(error);
+      console.error(JSON.stringify({ event: "exit_broadcast_failed", category: failure.category }));
+      if (failure.definitiveReject) {
+        // A JSON-RPC error response proves that this node rejected the
+        // transaction before acceptance. It is safe to release the RESERVED
+        // slot; transport failures remain ambiguous and serialized.
+        broadcastStarted = false;
+        throw new ExitExecutorError("exit_unavailable");
+      }
+      throw new ExitExecutorError("exit_uncertain");
+    }
     const transactionHash = normalizeHex(response.transaction_hash);
     if (transactionHash !== expectedHash) throw new ExitExecutorError("exit_uncertain");
     submissionStage = "mark_submitted";
@@ -294,4 +308,18 @@ function rpcErrorCode(error: unknown): number | undefined {
     ? record.baseError as Record<string, unknown>
     : undefined;
   return typeof record?.code === "number" ? record.code : typeof base?.code === "number" ? base.code : undefined;
+}
+
+export function classifyBroadcastFailure(error: unknown): Readonly<{
+  category: "rpc_execution" | "rpc_transaction_nonce" | "rpc_validate_resources" | "rpc_account_balance" | "rpc_validation" | "rpc_other" | "transport_or_unknown";
+  definitiveReject: boolean;
+}> {
+  const code = rpcErrorCode(error);
+  if (code === 41) return { category: "rpc_execution", definitiveReject: true };
+  if (code === 52) return { category: "rpc_transaction_nonce", definitiveReject: true };
+  if (code === 53) return { category: "rpc_validate_resources", definitiveReject: true };
+  if (code === 54) return { category: "rpc_account_balance", definitiveReject: true };
+  if (code === 55) return { category: "rpc_validation", definitiveReject: true };
+  if (code !== undefined) return { category: "rpc_other", definitiveReject: true };
+  return { category: "transport_or_unknown", definitiveReject: false };
 }

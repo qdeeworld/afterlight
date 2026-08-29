@@ -50,6 +50,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 - Never release a submitted reservation based only on an RPC timeout. Confirm the transaction or account nonce before any manual recovery.
 - A receipt fee above its reservation records the full spend and freezes all new sponsorship.
 - Never rotate `DEPLOYMENT_ID` to bypass a `SUBMITTED` or otherwise ambiguous reservation. A new ledger namespace is permitted only after independent transaction, nonce, contract-state, allowance and balance checks prove that no broadcast occurred. Record the abandoned namespace, rebaseline the actual funded balance, use a unique deployment ID, and retain a hard balance floor and one-attempt exit cap in the replacement release.
+- E3 namespace `afterlight-mainnet-e3-20260829-v5` is abandoned after a transport-ambiguous broadcast call. More than 70 subsequent Mainnet blocks plus both latest and pre-confirmed nonce reads proved neutral nonce `34` unchanged; vault state, successor nonce, liability, allowance and neutral balance were also byte-for-byte unchanged. Namespace `afterlight-mainnet-e3-20260829-v6` is its one-attempt replacement. This recorded recovery does not permit reuse of v5 or rotation after any accepted or still-ambiguous submission.
 
 ## Monitoring and alerts
 

@@ -5,12 +5,24 @@ import {
   assertOuterSignatureMatchesHash,
   assertSignedExitTransaction,
 } from "../src/neutral-exit-policy.mjs";
+import { classifyBroadcastFailure } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
 const TEST_SIGNER = "0x12345";
 
 describe("neutral exact-exit signing boundary", () => {
+  it("distinguishes definitive RPC rejection from ambiguous transport failure", () => {
+    expect(classifyBroadcastFailure({ baseError: { code: 55 } })).toEqual({
+      category: "rpc_validation",
+      definitiveReject: true,
+    });
+    expect(classifyBroadcastFailure(new Error("network unavailable"))).toEqual({
+      category: "transport_or_unknown",
+      definitiveReject: false,
+    });
+  });
+
   it("signs the real proof facts and reconstructs the exact outer hash offline", async () => {
     const provider = new RpcProvider({ nodeUrl: "http://127.0.0.1:1", plugins: false });
     vi.spyOn(provider, "getChainId").mockResolvedValue(MAINNET_CHAIN_ID);
