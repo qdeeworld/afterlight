@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT } from "../src/config.ts";
+import { isRetryableCheckpointCode } from "../src/checkpoint-policy.ts";
 import { isCompatibleReadyVersion } from "../src/compatibility.ts";
 import { parseInvitation } from "../src/model.ts";
 
@@ -44,4 +45,22 @@ describe("public product compatibility", () => {
       graceSeconds: "300",
     }))).toMatchObject({ valid: false });
   });
+
+  it.each([
+    "internal_error",
+    "receipt_unreconciled",
+    "relayer_busy",
+    "simulation_failed",
+    "submission_mismatch",
+    "submission_uncertain",
+  ])("retains the owner-bound checkpoint token for retryable %s outcomes", (code) => {
+    expect(isRetryableCheckpointCode(code)).toBe(true);
+  });
+
+  it.each(["funding_unavailable", "invalid_request", "submission_disabled", undefined])(
+    "clears the checkpoint token for definitive %s outcomes",
+    (code) => {
+      expect(isRetryableCheckpointCode(code)).toBe(false);
+    },
+  );
 });

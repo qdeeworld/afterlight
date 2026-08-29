@@ -31,6 +31,7 @@ import type { RecoveryInvitation, VaultSnapshot } from "./model.ts";
 import type { ReadySession } from "./wallet.ts";
 import { TransactionExecutionError, waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
+import { isRetryableCheckpointCode } from "./checkpoint-policy.ts";
 
 export function generateKey(): LocalStarkKey {
   return LocalStarkKey.generate();
@@ -88,14 +89,6 @@ export function hasPendingCheckpointReconciliation(): boolean {
   return pendingCheckpointAdmissionToken !== undefined;
 }
 
-const AMBIGUOUS_CHECKPOINT_CODES = new Set([
-  "internal_error",
-  "receipt_unreconciled",
-  "relayer_busy",
-  "submission_mismatch",
-  "submission_uncertain",
-]);
-
 async function checkpoint(): Promise<string> {
   const admissionToken = pendingCheckpointAdmissionToken ?? randomHex(32);
   retainCheckpointAdmissionToken(admissionToken);
@@ -117,7 +110,7 @@ async function checkpoint(): Promise<string> {
         result?: { status?: string; transactionHash?: string };
       };
       if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash || !["accepted", "duplicate"].includes(String(body.result.status))) {
-        if (body.code && AMBIGUOUS_CHECKPOINT_CODES.has(body.code)) {
+        if (isRetryableCheckpointCode(body.code)) {
           throw new Error("checkpoint_ambiguous");
         }
         throw new Error("checkpoint_rejected");
