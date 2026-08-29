@@ -542,10 +542,19 @@ async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blo
 function hex(value: string | bigint): string { return `0x${BigInt(value).toString(16)}`; }
 
 function readFee(value: unknown): string {
-  if (typeof value === "string") return BigInt(value).toString();
-  if (typeof value !== "object" || value === null) return "0";
-  const amount = (value as Record<string, unknown>).amount;
-  return typeof amount === "string" ? BigInt(amount).toString() : "0";
+  const amount = typeof value === "string"
+    ? value
+    : typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>).amount
+      : undefined;
+  if (typeof amount !== "string") throw new ExitExecutorError("exit_uncertain");
+  try {
+    const fee = BigInt(amount);
+    if (fee <= 0n) throw new Error("non_positive_fee");
+    return fee.toString();
+  } catch {
+    throw new ExitExecutorError("exit_uncertain");
+  }
 }
 
 function exitStage(stage: string): ExitExecutorError {

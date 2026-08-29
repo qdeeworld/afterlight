@@ -127,6 +127,32 @@ describe("neutral exact-exit signing boundary", () => {
     expect(budget.finalize).toHaveBeenCalledWith(binding, binding, transactionHash, "70", "succeeded", expect.any(Number));
   });
 
+  it.each([
+    ["missing", undefined],
+    ["malformed object", {}],
+    ["malformed amount", { amount: "not-a-fee" }],
+    ["zero", { amount: "0x0" }],
+  ])("keeps an accepted receipt with a %s actual fee uncertain", async (_label, actualFee) => {
+    const transactionHash = "0xabc";
+    const binding = "a".repeat(64);
+    const provider = {
+      waitForTransaction: vi.fn().mockResolvedValue({
+        isError: () => false,
+        isReverted: () => false,
+        value: { transaction_hash: transactionHash, actual_fee: actualFee },
+      }),
+    } as any;
+    const budget = {
+      markSubmitted: vi.fn().mockResolvedValue({ outcome: "submitted" }),
+      finalize: vi.fn().mockResolvedValue({ outcome: "committed" }),
+    } as any;
+    await expect(reconcileSubmittedExit(provider, budget, { bindingSha256: binding } as any, transactionHash)).rejects.toMatchObject({
+      code: "exit_uncertain",
+    });
+    expect(budget.markSubmitted).not.toHaveBeenCalled();
+    expect(budget.finalize).not.toHaveBeenCalled();
+  });
+
   it("reconciles a stored SUBMITTED exit while fresh submission is disabled", async () => {
     const transactionHash = "0xabc";
     const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
