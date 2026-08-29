@@ -79,8 +79,11 @@ Only the configured reserve becomes a vault liability. Donated surplus neither b
 
 The public product also reads the sponsor's collapsed claim-capacity status.
 It disables new funding unless total liability is zero and one claim or cancellation is covered by the exact pool allowance,
-the bounded outer fee, and the post-spend health floor. The public release therefore admits at most one outstanding reserve. This is an availability
-guard, not an authorization primitive; the contract and pool remain final.
+the bounded outer fee, and the post-spend health floor. The supported public route serializes one funding admission at a time. This is an availability
+guard, not an onchain authorization or per-vault capacity reservation: the deployed contract intentionally permits anyone to refresh its one-shot
+checkpoint, and multiple fully collateralized vault liabilities may exist. A caller bypassing the supported route cannot consume another vault's
+backing, but neither that caller nor an ordinary user is promised immediate neutral-sponsor capacity at a future exit. Claim and cancellation fail
+closed and may wait until the operator restores the exact allowance, balance, and daily budget. The contract and pool remain final.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or

@@ -67,7 +67,7 @@ Relayer availability is operationally important but not trusted for correctness.
 | Relayer drains sponsorship | Schema limits, expiry, validation before scarce per-vault rate limiting, separate control/exit daily caps, shared nonce serialization, and breach freeze |
 | Prepared proof swaps the pool implementation or adds actions | Pinned live pool class plus an exact `WriteOnce → EmitOpenNoteCreated → Invoke` action sequence and canonical destination-note storage write |
 | Ambiguous broadcast is retried or released | `SUBMITTED` retains its hash and reservation; duplicate/unknown RPC results reconcile without signing or rebroadcasting |
-| Product creates more reserves than the sponsor can settle | Live funding-capacity health check; funding fails closed unless liability is zero and exact allowance, balance, exit cap, and health floor reconcile |
+| Reserve demand exceeds current neutral-sponsor capacity | The supported UI and checkpoint route fail closed unless live allowance, balance, exit cap, health floor, liability and lease state reconcile. The permissionless contract checkpoint can still admit another fully backed vault outside that route, so sponsorship is explicitly capacity-limited and an exit may queue until capacity is restored; no vault can consume another vault's backing. |
 | Application logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from application logs; infrastructure metadata remains a separate limit |
 
 ## Relayer and hosting metadata boundary
