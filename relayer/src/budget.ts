@@ -36,6 +36,8 @@ export type BudgetMutationResult = Readonly<{
   outcome:
     | "released"
     | "already_released"
+    | "prepared"
+    | "already_prepared"
     | "submitted"
     | "already_submitted"
     | "committed"
@@ -319,6 +321,9 @@ export class RelayBudget extends DurableObject<Env> {
       const terminal = terminalMutationOutcome(row.status);
       if (terminal !== undefined) return mutationResult(terminal, totals, this.isFrozen());
       if (row.status !== "RESERVED") throw new BudgetError("reservation_not_submitted");
+      if (row.transaction_hash !== null && row.transaction_hash !== hash) {
+        throw new BudgetError("idempotency_conflict");
+      }
       this.ctx.storage.sql.exec(
         `UPDATE reservations
          SET status = 'SUBMITTED', transaction_hash = ?, updated_at_ms = ?
@@ -328,6 +333,38 @@ export class RelayBudget extends DurableObject<Env> {
         semantic,
       );
       return mutationResult("submitted", totals, this.isFrozen());
+    });
+  }
+
+  markPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    expectedTransactionHash: string,
+    nowMs: number,
+  ): BudgetMutationResult {
+    const semantic = validKey(semanticKey);
+    const exact = validKey(exactFingerprint);
+    const hash = validTransactionHash(expectedTransactionHash);
+    const timestamp = validTimestamp(nowMs);
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.requiredReservation(semantic);
+      const totals = this.readTotals(row.budget_class, row.day_key);
+      if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
+      if (row.status === "RESERVED" && row.transaction_hash === hash) {
+        return mutationResult("already_prepared", totals, this.isFrozen());
+      }
+      if (row.status !== "RESERVED" || row.transaction_hash !== null) {
+        throw new BudgetError("reservation_not_releasable");
+      }
+      this.ctx.storage.sql.exec(
+        `UPDATE reservations
+         SET transaction_hash = ?, updated_at_ms = ?
+         WHERE semantic_key = ?`,
+        hash,
+        timestamp,
+        semantic,
+      );
+      return mutationResult("prepared", totals, this.isFrozen());
     });
   }
 

@@ -59,6 +59,24 @@ describe("deployment-wide sponsorship coordinator", () => {
     });
   });
 
+  it("persists a recoverable expected hash before broadcast and releases a definitive reject", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput());
+    expect((await budget.markPrepared(semantic, exact, "0xabc", 2)).outcome).toBe("prepared");
+    expect((await budget.markPrepared(semantic, exact, "0xabc", 3)).outcome).toBe("already_prepared");
+    expect(await budget.lookup(semantic)).toMatchObject({
+      state: "reserved",
+      transactionHash: "0xabc",
+    });
+    await runInDurableObject(budget, async (instance: RelayBudget) => {
+      expect(() => instance.markSubmitted(semantic, exact, "0xdef", 4)).toThrowError(
+        "idempotency_conflict",
+      );
+    });
+    expect((await budget.release(semantic, exact, 5)).outcome).toBe("released");
+    expect(await budget.snapshot(dayOne)).toMatchObject({ reservedTodayFri: "0" });
+  });
+
   it("enforces per-call and daily exposure inside the atomic reservation", async () => {
     const budget = freshBudget();
     await runInDurableObject(budget, async (instance: RelayBudget) => {

@@ -47,7 +47,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 - A timed-out receipt remains `SUBMITTED`; its full maximum stays reserved.
 - Retry only the exact original request. The executor reuses its stored transaction hash and reconciles the receipt without simulating, signing, or broadcasting again.
 - RPC duplicate and unknown-result errors are transport-ambiguous, never proof of rejection. Keep their reservations locked until receipt and nonce evidence resolves them.
-- An ambiguous exit broadcast records the deterministic outer transaction hash as `SUBMITTED` before returning, enabling exact receipt-only reconciliation. Alert immediately if that ledger write itself fails.
+- Before broadcasting an exit, the relayer stores the deterministic outer transaction hash on the still-releasable reservation. A definitive RPC rejection releases that pre-broadcast record; an accepted or ambiguous broadcast reconciles the exact stored hash and only then transitions it to `SUBMITTED`. No post-broadcast ledger write is required to recover the expected hash.
 - A request with the same semantic operation but different signature, expiry, or exact fingerprint cannot reconcile the submitted transaction.
 - Never release a submitted reservation based only on an RPC timeout. Confirm the transaction or account nonce before any manual recovery.
 - A receipt fee above its reservation records the full spend and freezes all new sponsorship.

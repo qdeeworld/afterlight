@@ -194,7 +194,7 @@ export async function executePreparedExit(
   const prior = await budget.lookup(semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     if (
-      prior.state === "submitted" &&
+      (prior.state === "reserved" || prior.state === "submitted") &&
       prior.transactionHash !== null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
@@ -315,6 +315,13 @@ export async function executePreparedExit(
     });
     submissionStage = "outer_hash";
     const expectedHash = assertOuterSignatureMatchesHash(signed);
+    submissionStage = "persist_expected_hash";
+    await budget.markPrepared(
+      semanticKey,
+      validated.bindingSha256,
+      expectedHash,
+      Date.now(),
+    );
     submissionStage = "broadcast";
     broadcastStarted = true;
     let response;
@@ -330,15 +337,10 @@ export async function executePreparedExit(
         broadcastStarted = false;
         throw new ExitExecutorError("exit_unavailable");
       }
-      // The deterministic outer hash is already known. Persist it before
-      // returning an ambiguous result so an exact retry can perform receipt-
-      // only reconciliation rather than leaving a hashless RESERVED slot.
-      await persistAmbiguousExitHash(budget, validated, expectedHash);
       throw new ExitExecutorError("exit_uncertain");
     }
     const transactionHash = normalizeHex(response.transaction_hash);
     if (transactionHash !== expectedHash) {
-      await persistAmbiguousExitHash(budget, validated, expectedHash);
       throw new ExitExecutorError("exit_uncertain");
     }
     submissionStage = "mark_submitted";
@@ -362,19 +364,6 @@ export async function executePreparedExit(
   }
 }
 
-export async function persistAmbiguousExitHash(
-  budget: BudgetCoordinator,
-  validated: Pick<ValidatedExit, "bindingSha256">,
-  expectedHash: string,
-): Promise<void> {
-  await budget.markSubmitted(
-    validated.bindingSha256,
-    validated.bindingSha256,
-    normalizeHex(expectedHash),
-    Date.now(),
-  );
-}
-
 export async function reconcileSubmittedExit(
   provider: RpcProvider,
   budget: BudgetCoordinator,
@@ -392,6 +381,12 @@ export async function reconcileSubmittedExit(
   const observedHash = typeof raw.transaction_hash === "string" ? normalizeHex(raw.transaction_hash) : transactionHash;
   if (observedHash !== normalizeHex(transactionHash)) throw new ExitExecutorError("exit_uncertain");
   const fee = readFee(raw.actual_fee);
+  await budget.markSubmitted(
+    validated.bindingSha256,
+    validated.bindingSha256,
+    transactionHash,
+    Date.now(),
+  );
   if (receipt.isReverted()) {
     await budget.finalize(validated.bindingSha256, validated.bindingSha256, transactionHash, fee, "reverted", Date.now());
     throw new ExitExecutorError("exit_reverted");

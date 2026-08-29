@@ -77,6 +77,12 @@ export interface BudgetCoordinator {
     transactionHash: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
+  markPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    expectedTransactionHash: string,
+    nowMs: number,
+  ): Promise<BudgetMutationResult>;
   release(
     semanticKey: string,
     exactFingerprint: string,
