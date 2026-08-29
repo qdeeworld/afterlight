@@ -10,6 +10,7 @@
     "operator:build": "esbuild tools/mainnet-operator.ts --bundle --format=esm --platform=browser --outfile=tools/mainnet-operator.js",
     "preflight:build": "esbuild tools/private-exit-preflight.ts --bundle --format=esm --platform=browser --minify --alias:starknet=./tools/starknet-narrow.ts --metafile=tools/private-exit-preflight.meta.json --outfile=tools/private-exit-preflight.js",
     "verify:locked-artifacts": "node tools/verify-locked-artifacts.mjs",
+    "verify:mainnet": "node tools/verify-mainnet.mjs",
     "quote:mainnet": "node tools/quote-declare-deploy.mjs",
     "quote:ready-deploy": "node tools/quote-ready-deployment.mjs",
     "quote:ready-build": "esbuild tools/ready-deployment-data.ts --bundle --format=esm --platform=browser --outfile=tools/ready-quote.js"

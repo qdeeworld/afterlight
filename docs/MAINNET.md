@@ -31,10 +31,12 @@ artifact-identity proof for the live pool class.
 | Sierra class hash | `0x05da9866f62cc6dd1e380e8d9206e78a752b460abdb802070e0be1208ec7b1a6` | Declared on Mainnet |
 | CASM/compiled class hash | `0x055ba10e36aac8e21b3437f1413f009f6b17d3633c307941a4412ce73566251` | Declaration lock |
 | Afterlight contract | [`0x06e8…61c25`](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25) | Deployed on Mainnet |
-| Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; spike controls complete |
+| Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; public E3 controls complete |
 
 Run `scarb --profile spike-inline-56 build` and
 `npm --prefix client run verify:locked-artifacts` to recompute the exact hashes.
+A read-only live release verification is available as
+`npm --prefix client run verify:mainnet`.
 A different source, dependency resolution, compiler, profile, constructor, or
 deployer must be treated as a different release and re-verified.
 
@@ -60,3 +62,11 @@ reconciliation is `6 STRK -> 7 STRK`: the exact `+1 STRK` recovery output was
 added to the beneficiary while the neutral sponsor paid the separate `6 STRK`
 pool fee. The public E3 vault is also `CLAIMED`; its immediate Ready X
 reconciliation is `7 STRK -> 8 STRK`. Final video production remains pending.
+
+The public E3 lifecycle was founder-operated. An unrelated owner-successor E4
+completion is not claimed.
+
+Historical identifiers such as the `spike-inline-56` compiler profile and the
+relayer's `phase-a` hostname are pinned release identifiers. They do not mean
+the deployed public release is still an inert preparation environment; changing
+them would break reproducibility or the stable public endpoint.
