@@ -612,10 +612,15 @@ export class RelayBudget extends DurableObject<Env> {
     });
   }
 
-  fundingAdmissionSnapshot(nowMs: number): FundingAdmissionResult {
+  fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): FundingAdmissionResult {
     const now = validTimestamp(nowMs);
-    const expiresAtMs = this.fundingAdmissionState().expiresAtMs;
+    const owner = ownerToken === undefined ? undefined : validKey(ownerToken);
+    const current = this.fundingAdmissionState();
+    const expiresAtMs = current.expiresAtMs;
     const active = expiresAtMs !== null && expiresAtMs > now;
+    if (active && owner !== undefined && current.ownerToken === owner) {
+      return { acquired: false, active: false, expiresAtMs: null };
+    }
     return { acquired: false, active, expiresAtMs: active ? expiresAtMs : null };
   }
 

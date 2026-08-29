@@ -96,6 +96,39 @@ describe("fail-closed exact-call executor", () => {
     expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
   });
 
+  it.each([41, 52, 53, 54, 55])(
+    "releases a prepared control reservation after definitive RPC rejection %i",
+    async (code) => {
+      const adapter = fakeAdapter({ submissionError: { baseError: { code } } });
+      const budget = freshBudget();
+      await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+        new ExecutorError("submission_not_started"),
+      );
+      expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
+      expect(await budget.lookup(plan.semanticKey)).toMatchObject({ outcome: "found", state: "released" });
+      expect(adapter.reconcileReceipt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a prepared control reservation locked after an ambiguous broadcast failure", async () => {
+    const adapter = fakeAdapter({ submissionError: new Error("network unavailable") });
+    const budget = freshBudget();
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+      new ExecutorError("submission_uncertain"),
+    );
+    expect(await budget.snapshot(day)).toMatchObject({
+      reservedTodayFri: "110",
+      spentTodayFri: "0",
+      reservedCount: 1,
+    });
+    expect(await budget.lookup(plan.semanticKey)).toMatchObject({
+      outcome: "found",
+      state: "reserved",
+      transactionHash: "0xabc",
+      preparedPayload: "{}",
+    });
+  });
+
   it("keeps ambiguous receipt exposure reserved for exact-request reconciliation", async () => {
     const adapter = fakeAdapter({ receipt: { status: "pending" } });
     const budget = freshBudget();
@@ -340,6 +373,7 @@ function successfulSimulation(quotedFeeFri = "100"): ExactSimulation {
 function fakeAdapter(overrides: {
   simulation?: ExactSimulation;
   submission?: ExactSubmission;
+  submissionError?: unknown;
   receipt?: ExactReceipt;
 } = {}): StarknetRelayAdapter & {
   simulateExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["simulateExact"]>>;
@@ -350,6 +384,7 @@ function fakeAdapter(overrides: {
     simulateExact: vi.fn(async () => overrides.simulation ?? successfulSimulation()),
     signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri, persistPrepared) => {
       await persistPrepared("0xabc", "{}");
+      if (overrides.submissionError !== undefined) throw overrides.submissionError;
       return overrides.submission ?? {
         submitted: true,
         transactionHash: "0xabc",

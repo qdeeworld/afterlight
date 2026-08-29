@@ -132,11 +132,21 @@ function walletRow(): string {
   return `<section class="wallet-row" data-status="${walletStatus}"><div class="section-heading"><span class="step-number">01</span><div><strong>Connect Ready X</strong><span>${escapeHtml(walletCopy())}</span></div></div><button class="button secondary" data-action="connect" ${busy ? "disabled" : ""}>${walletStatus === "connected" ? "Refresh balance" : "Connect"}</button></section>`;
 }
 
+function canFundReserve(): boolean {
+  return fundingCapacity === "ready"
+    && walletStatus === "connected"
+    && privateBalance !== undefined
+    && privateBalance >= 7n * 10n ** 18n
+    && applicationKey !== undefined
+    && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey)
+    && costAcknowledged;
+}
+
 function ownerView(): string {
   const invitation = parseInvitation(invitationText);
-  const canFund = fundingCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey);
+  const canFund = canFundReserve();
   const liveControls = invitation.valid && vault?.exists;
-  return `<section class="journey" aria-labelledby="owner-heading">
+  return `<section class="journey" data-role-view="owner" aria-labelledby="owner-heading">
     <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"} · 1 STRK</span></div>
     <p class="lede">Privately set aside 1 STRK. Heartbeat while active and veto a recovery request during grace.</p>
     ${journeyProgress()}
@@ -147,7 +157,7 @@ function ownerView(): string {
       <label class="full-field"><span>Designated successor public key</span><input name="successor-key" autocomplete="off" spellcheck="false" placeholder="0x…" value="${escapeHtml(successorPublicKey)}" /><small>The successor must generate this independently. Do not accept their secret.</small></label>
       <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this reserve uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction. Neutral exit sponsorship is capacity-limited and rechecked later; recovery or cancellation waits if capacity must be restored.</p></aside>
       <label class="ack"><input name="cost-ack" type="checkbox" ${costAcknowledged ? "checked" : ""} /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
-      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : "Create and privately fund reserve"}</button>
+      <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : fundingCapacity === "unknown" ? "Recovery capacity unavailable" : !costAcknowledged ? "Confirm the 7 STRK cost to continue" : "Create and privately fund reserve"}</button>
       ${fundingCapacity === "exhausted" ? `<p class="error">The supported route already has an outstanding reserve or private-exit capacity needs replenishment. New funding stays paused; existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
     </form>
@@ -157,7 +167,7 @@ function ownerView(): string {
 
 function successorView(): string {
   const parsed = parseInvitation(invitationText);
-  return `<section class="journey" aria-labelledby="successor-heading">
+  return `<section class="journey" data-role-view="successor" aria-labelledby="successor-heading">
     <div class="journey-heading"><div><p class="eyebrow">Successor · live on Mainnet</p><h2 id="successor-heading">Recover a reserve privately</h2></div><span class="journey-mode">Designated key only</span></div>
     <p class="lede">Generate your own per-vault key, import the invitation, and request only after authenticated inactivity.</p>
     ${journeyProgress()}
@@ -212,11 +222,12 @@ function statusPanel(): string {
 
 function render(): void {
   app.innerHTML = `<header class="site-header"><a class="brand" href="/"><span aria-hidden="true">◐</span>Afterlight</a><div class="network"><span aria-hidden="true"></span>Live on Starknet Mainnet</div></header>
-  <main id="main"><section class="intro"><div><p class="kicker">Private recovery, under your control</p><h1>A reserve for the person you trust—without publishing the relationship.</h1><p>Heartbeat while active. Veto during grace. Only the designated successor key can authorize private recovery.</p></div><div class="promise"><span>01</span><p><strong>Fund privately</strong><small>The owner-to-vault link stays unlinked.</small></p><span>02</span><p><strong>Stay in control</strong><small>Heartbeat or veto through a neutral relay.</small></p><span>03</span><p><strong>Recover exactly once</strong><small>One designated key. One exact private note.</small></p></div></section>
+  <main id="main"><section class="intro"><div><p class="kicker">Private recovery, under your control</p><h1>A private reserve for the person you trust.</h1><p>Keep the relationship unlinked. Heartbeat while active, veto during grace, and let only the designated successor key authorize private recovery.</p></div><div class="promise"><span>01</span><p><strong>Fund privately</strong><small>The owner-to-vault link stays unlinked.</small></p><span>02</span><p><strong>Stay in control</strong><small>Heartbeat or veto through a neutral relay.</small></p><span>03</span><p><strong>Recover exactly once</strong><small>One designated key. One exact private note.</small></p></div></section>
   <nav class="role-tabs" aria-label="Choose your role"><button data-role="owner" aria-current="${role === "owner" ? "page" : "false"}">I’m the owner</button><button data-role="successor" aria-current="${role === "successor" ? "page" : "false"}">I’m the successor</button></nav>
   <div class="activity-banner" role="status" aria-live="polite" data-busy="${busy}"><span aria-hidden="true">${busy ? "…" : "●"}</span><p>${busy ? "Working · " : ""}${escapeHtml(notice)}</p></div>
   <div class="content-grid">${role === "owner" ? ownerView() : successorView()}${statusPanel()}</div></main>
-  <footer><span>Afterlight is a recovery tool, not legal inheritance automation.</span><a href="https://github.com/dolepee/afterlight">Open-source contract</a></footer>`;
+  <footer><span>Afterlight is a recovery tool, not legal inheritance automation.</span><a href="https://github.com/dolepee/afterlight">Open-source contract</a></footer>
+  <dialog id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-description"><form method="dialog"><p class="eyebrow">Private return</p><h2 id="cancel-title">Cancel this reserve?</h2><p id="cancel-description">Its 1 STRK principal returns to this Ready X private balance. The reserve cannot be recovered afterward.</p><div class="button-row"><button class="button secondary" type="button" data-action="dismiss-cancel">Keep reserve active</button><button class="button danger" type="button" data-action="confirm-cancel">Cancel and return 1 STRK</button></div></form></dialog>`;
   bindEvents();
 }
 
@@ -285,10 +296,11 @@ function bindEvents(): void {
   document.querySelector<HTMLInputElement>("[name=successor-key]")?.addEventListener("input", (event) => {
     successorPublicKey = (event.currentTarget as HTMLInputElement).value.trim();
     const submit = document.querySelector<HTMLButtonElement>("#reserve-form button[type=submit]");
-    if (submit) submit.disabled = !(fundingCapacity === "ready" && walletStatus === "connected" && privateBalance !== undefined && privateBalance >= 7n * 10n ** 18n && applicationKey && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey));
+    if (submit) submit.disabled = !canFundReserve();
   });
   document.querySelector<HTMLInputElement>("[name=cost-ack]")?.addEventListener("change", (event) => {
     costAcknowledged = (event.currentTarget as HTMLInputElement).checked;
+    render();
   });
   document.querySelectorAll<HTMLInputElement>("[name=reserve-mode]").forEach((input) => input.addEventListener("change", () => {
     reserveMode = input.value === "FAST_DEMO" ? "FAST_DEMO" : "NORMAL";
@@ -339,8 +351,11 @@ function bindEvents(): void {
     vault = await readVault(parsed.invitation.vaultId);
     notice = `${operation === "HEARTBEAT" ? "Heartbeat recorded" : operation === "REQUEST" ? "Recovery grace opened" : "Recovery vetoed"}. Mainnet state is now ${stateName(vault.state)}.`;
   })));
-  document.querySelector<HTMLButtonElement>("[data-action=cancel-refund]")?.addEventListener("click", () => {
-    if (!window.confirm("Cancel this reserve and return its 1 STRK principal to this Ready X private balance? This cannot be undone.")) return;
+  const cancelDialog = document.querySelector<HTMLDialogElement>("#cancel-dialog");
+  document.querySelector<HTMLButtonElement>("[data-action=cancel-refund]")?.addEventListener("click", () => cancelDialog?.showModal());
+  document.querySelector<HTMLButtonElement>("[data-action=dismiss-cancel]")?.addEventListener("click", () => cancelDialog?.close());
+  document.querySelector<HTMLButtonElement>("[data-action=confirm-cancel]")?.addEventListener("click", () => {
+    cancelDialog?.close();
     void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated owner key first.");

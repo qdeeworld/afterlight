@@ -98,6 +98,21 @@ describe("deployment-wide sponsorship coordinator", () => {
       active: true,
       expiresAtMs: 601_000,
     });
+    expect(await budget.fundingAdmissionSnapshot(2_000, owner)).toEqual({
+      acquired: false,
+      active: false,
+      expiresAtMs: null,
+    });
+    expect(await budget.fundingAdmissionSnapshot(2_000, alternateOwner)).toEqual({
+      acquired: false,
+      active: true,
+      expiresAtMs: 601_000,
+    });
+    expect(await budget.fundingAdmissionSnapshot(2_000)).toEqual({
+      acquired: false,
+      active: true,
+      expiresAtMs: 601_000,
+    });
     expect(await budget.acquireFundingAdmission(2_000, 600_000, alternateOwner)).toEqual({
       acquired: false,
       active: true,

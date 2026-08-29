@@ -13,6 +13,7 @@ import { BudgetError } from "./budget.js";
 import type { RelayPlan } from "./core.js";
 import { StarknetV3RelayAdapter } from "./starknet-adapter.js";
 import { SponsorshipError, authorizeSponsorship } from "./sponsorship.js";
+import { classifyBroadcastFailure } from "./rpc-errors.js";
 
 export type ExactFeeQuote = Readonly<{
   nonce: string;
@@ -117,7 +118,7 @@ export interface BudgetCoordinator {
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
   activeSnapshot(): Promise<ActiveBudgetSnapshot>;
   acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
-  fundingAdmissionSnapshot(nowMs: number): Promise<FundingAdmissionResult>;
+  fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): Promise<FundingAdmissionResult>;
   consumeFundingAdmission(nowMs: number): Promise<FundingAdmissionResult>;
 }
 
@@ -344,7 +345,25 @@ export async function executeRelayPlan(
         }
       },
     );
-  } catch {
+  } catch (error) {
+    if (classifyBroadcastFailure(error).definitiveReject) {
+      try {
+        const released = await budget.release(
+          plan.semanticKey,
+          plan.fingerprint,
+          ownerToken,
+          nowMs,
+        );
+        if (released.outcome === "released" || released.outcome === "already_released") {
+          throw new ExecutorError("submission_not_started");
+        }
+      } catch (releaseError) {
+        if (releaseError instanceof ExecutorError) throw releaseError;
+        // A later owner may have atomically taken over a stale hashless row.
+        // Never let the displaced request release or reclassify that row.
+        throw new ExecutorError("submission_uncertain");
+      }
+    }
     // An unexpected transport failure may have occurred after broadcast. Keep
     // the reservation until an operator reconciles the account nonce/receipt.
     throw new ExecutorError("submission_uncertain");
