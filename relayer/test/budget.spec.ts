@@ -241,6 +241,20 @@ describe("deployment-wide sponsorship coordinator", () => {
     expect((await budget.markPrepared(semantic, exact, "0xabc", "{}", alternateOwner, 120_003)).outcome).toBe("prepared");
   });
 
+  it("fences prepared rebroadcasts until the live owner lease expires", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput());
+    await budget.markPrepared(semantic, exact, "0xabc", "{}", owner, 1);
+    expect(await budget.takeoverPrepared(semantic, exact, alternateOwner, 120_000, 120_000)).toEqual({ acquired: false });
+    expect(await budget.takeoverPrepared(semantic, exact, alternateOwner, 120_001, 120_000)).toEqual({ acquired: true });
+    await runInDurableObject(budget, async (instance: RelayBudget) => {
+      expect(() => instance.release(semantic, exact, owner, 120_002)).toThrowError(
+        "reservation_owner_mismatch",
+      );
+    });
+    expect((await budget.markSubmitted(semantic, exact, "0xabc", 120_003)).outcome).toBe("submitted");
+  });
+
   it("keeps semantic idempotency global while UTC totals roll over", async () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput(semantic, exact, "100", dayOne));

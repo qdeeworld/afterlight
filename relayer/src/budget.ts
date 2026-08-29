@@ -103,7 +103,7 @@ export type FundingAdmissionResult = Readonly<{
   expiresAtMs: number | null;
 }>;
 
-export type HashlessTakeoverResult = Readonly<{ acquired: boolean }>;
+export type ReservationTakeoverResult = Readonly<{ acquired: boolean }>;
 
 export class BudgetError extends Error {
   readonly code:
@@ -449,7 +449,7 @@ export class RelayBudget extends DurableObject<Env> {
     newOwnerToken: string,
     nowMs: number,
     staleAfterMs: number,
-  ): HashlessTakeoverResult {
+  ): ReservationTakeoverResult {
     const semantic = validKey(semanticKey);
     const exact = validKey(exactFingerprint);
     const owner = validKey(newOwnerToken);
@@ -464,6 +464,41 @@ export class RelayBudget extends DurableObject<Env> {
         row.status !== "RESERVED" ||
         row.transaction_hash !== null ||
         row.prepared_payload !== null ||
+        timestamp - row.updated_at_ms < staleAfterMs
+      ) {
+        return { acquired: false };
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE reservations SET owner_token = ?, updated_at_ms = ? WHERE semantic_key = ?",
+        owner,
+        timestamp,
+        semantic,
+      );
+      return { acquired: true };
+    });
+  }
+
+  takeoverPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): ReservationTakeoverResult {
+    const semantic = validKey(semanticKey);
+    const exact = validKey(exactFingerprint);
+    const owner = validKey(newOwnerToken);
+    const timestamp = validTimestamp(nowMs);
+    if (!Number.isSafeInteger(staleAfterMs) || staleAfterMs < 60_000 || staleAfterMs > 600_000) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.requiredReservation(semantic);
+      if (
+        row.exact_fingerprint !== exact ||
+        row.status !== "RESERVED" ||
+        row.transaction_hash === null ||
+        row.prepared_payload === null ||
         timestamp - row.updated_at_ms < staleAfterMs
       ) {
         return { acquired: false };

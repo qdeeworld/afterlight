@@ -71,8 +71,19 @@ function base(vaultId: string, signerKey: string, state: string, epoch: string, 
   };
 }
 
+let pendingCheckpointAdmissionToken: string | undefined;
+
+const AMBIGUOUS_CHECKPOINT_CODES = new Set([
+  "internal_error",
+  "receipt_unreconciled",
+  "relayer_busy",
+  "submission_mismatch",
+  "submission_uncertain",
+]);
+
 async function checkpoint(): Promise<string> {
-  const admissionToken = randomHex(32);
+  const admissionToken = pendingCheckpointAdmissionToken ?? randomHex(32);
+  pendingCheckpointAdmissionToken = admissionToken;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
@@ -85,21 +96,30 @@ async function checkpoint(): Promise<string> {
         credentials: "omit",
         referrerPolicy: "no-referrer",
       });
-      const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
+      const body = await response.json() as {
+        status?: string;
+        code?: string;
+        result?: { status?: string; transactionHash?: string };
+      };
       if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash || !["accepted", "duplicate"].includes(String(body.result.status))) {
+        if (body.code && AMBIGUOUS_CHECKPOINT_CODES.has(body.code)) {
+          throw new Error("checkpoint_ambiguous");
+        }
         throw new Error("checkpoint_rejected");
       }
       const transactionHash = num.toHex(BigInt(body.result.transactionHash));
       await waitForSuccess(transactionHash);
+      pendingCheckpointAdmissionToken = undefined;
       return transactionHash;
     } catch (error) {
       if (error instanceof Error && error.message === "checkpoint_rejected") {
+        pendingCheckpointAdmissionToken = undefined;
         throw new Error("The neutral funding checkpoint was rejected. No private funds moved.", { cause: error });
       }
       if (attempt === 0) continue;
     }
   }
-  throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
+  throw new Error("The neutral funding checkpoint needs reconciliation. Retry this funding attempt; no private funds have been submitted yet.");
 }
 
 function randomHex(bytes: number): string {

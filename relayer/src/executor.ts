@@ -107,6 +107,13 @@ export interface BudgetCoordinator {
     nowMs: number,
     staleAfterMs: number,
   ): Promise<{ acquired: boolean }>;
+  takeoverPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): Promise<{ acquired: boolean }>;
   finalize(
     semanticKey: string,
     exactFingerprint: string,
@@ -201,6 +208,14 @@ export async function executeRelayPlan(
       prior.preparedPayload !== null &&
       prior.exactFingerprint === plan.fingerprint
     ) {
+      const takeover = await budget.takeoverPrepared(
+        plan.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(prior.state, prior.transactionHash);
       return rebroadcastPreparedControl(plan, prior.maxFeeFri, adapter, budget, prior.transactionHash, prior.preparedPayload, nowMs);
     }
     if (
@@ -242,6 +257,14 @@ export async function executeRelayPlan(
       );
     }
     if (active.state === "reserved" && active.transactionHash !== null && active.preparedPayload !== null) {
+      const takeover = await budget.takeoverPrepared(
+        active.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(active.state, active.transactionHash);
       return rebroadcastPreparedControl(
         activePlan,
         active.maxFeeFri,
@@ -270,7 +293,7 @@ export async function executeRelayPlan(
 
   // Admission checks that would reject an already-submitted retry belong only
   // on the fresh path, after both semantic and fingerprint reconciliation.
-  await beforeFreshExecution?.();
+  if (adoptedMaxFeeFri === null) await beforeFreshExecution?.();
 
   const simulation = await adapter.simulateExact(plan);
   if (!simulation.ok) throw new ExecutorError("simulation_failed");

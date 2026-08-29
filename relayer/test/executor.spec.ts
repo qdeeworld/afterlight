@@ -187,10 +187,14 @@ describe("fail-closed exact-call executor", () => {
       state: "reserved",
       transactionHash: null,
     });
-    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001)).resolves.toMatchObject({
+    const beforeFreshExecution = vi.fn(async () => {
+      throw new Error("an adopted reservation must not reacquire funding admission");
+    });
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001, beforeFreshExecution)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
     });
+    expect(beforeFreshExecution).not.toHaveBeenCalled();
     expect(adapter.signAndSubmitExact).toHaveBeenCalledOnce();
   });
 
@@ -211,7 +215,14 @@ describe("fail-closed exact-call executor", () => {
     await budget.markPrepared(plan.semanticKey, plan.fingerprint, "0xabc", "{}", seededOwner, nowMs + 1);
     const nextBucket = { ...plan, semanticKey: "b".repeat(64) };
 
-    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 2)).resolves.toMatchObject({
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 2)).resolves.toEqual({
+      status: "duplicate",
+      state: "reserved",
+      transactionHash: "0xabc",
+    });
+    expect(adapter.rebroadcastPreparedExact).not.toHaveBeenCalled();
+
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 120_002)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
     });
