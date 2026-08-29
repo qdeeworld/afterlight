@@ -24,6 +24,27 @@ let exitCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let fundingCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let reserveMode: "NORMAL" | "FAST_DEMO" = "NORMAL";
 
+async function refreshSponsorCapacity(): Promise<void> {
+  const response = await fetch(`${RELAYER_URL}/health`, {
+    cache: "no-store",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  const body = await response.json() as {
+    submission?: string;
+    claimCapacity?: { status?: string; fundingStatus?: string };
+  };
+  if (!response.ok || body.submission !== "enabled" || body.claimCapacity === undefined) {
+    throw new Error("The neutral sponsor capacity could not be verified. No wallet request was made.");
+  }
+  exitCapacity = body.claimCapacity.status === "ready"
+    ? "ready"
+    : body.claimCapacity.status === "exhausted" ? "exhausted" : "unknown";
+  fundingCapacity = body.claimCapacity.fundingStatus === "ready"
+    ? "ready"
+    : body.claimCapacity.fundingStatus === "exhausted" ? "exhausted" : "unknown";
+}
+
 const appRoot = document.querySelector<HTMLDivElement>("#app");
 if (!appRoot) throw new Error("Afterlight app root is missing.");
 const app: HTMLDivElement = appRoot;
@@ -283,6 +304,7 @@ function bindEvents(): void {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
     void run(async () => {
+      await refreshSponsorCapacity();
       if (fundingCapacity !== "ready") throw new Error("New recovery reserves are paused until funding capacity is verified and available.");
       if (!form.has("cost-ack") || !costAcknowledged) throw new Error("Confirm the exact 7 STRK private-wallet consequence first.");
       if (!ready || !applicationKey) throw new Error("Connect Ready X and generate the owner key first.");
@@ -322,6 +344,7 @@ function bindEvents(): void {
     void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated owner key first.");
+    await refreshSponsorCapacity();
     if (exitCapacity !== "ready") throw new Error("Private cancellation is paused until sponsor exit capacity is restored.");
     const balanceBefore = await ready.balance(STRK);
     notice = "Ready X will prepare one exact private return note. The neutral sponsor pays the pool and network fees."; render();
@@ -339,6 +362,7 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("[data-action=claim]")?.addEventListener("click", () => void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated successor key first.");
+    await refreshSponsorCapacity();
     if (exitCapacity !== "ready") throw new Error("Private recovery is paused until sponsor exit capacity is restored.");
     const balanceBefore = await ready.balance(STRK);
     notice = "Ready X will prepare the exact private destination twice, then the neutral sponsor will submit it. The sponsor pays the pool and network fees."; render();
@@ -365,10 +389,7 @@ void run(async () => {
   await assertMainnet();
   await readLiability();
   try {
-    const response = await fetch(`${RELAYER_URL}/health`, { cache: "no-store", credentials: "omit", referrerPolicy: "no-referrer" });
-    const body = await response.json() as { claimCapacity?: { status?: string; fundingStatus?: string } };
-    exitCapacity = body.claimCapacity?.status === "ready" ? "ready" : body.claimCapacity?.status === "exhausted" ? "exhausted" : "unknown";
-    fundingCapacity = body.claimCapacity?.fundingStatus === "ready" ? "ready" : body.claimCapacity?.fundingStatus === "exhausted" ? "exhausted" : "unknown";
+    await refreshSponsorCapacity();
   } catch {
     exitCapacity = "unknown";
     fundingCapacity = "unknown";

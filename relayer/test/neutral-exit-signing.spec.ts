@@ -16,7 +16,7 @@ import {
   validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit } from "../src/exit-executor.js";
+import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
@@ -79,6 +79,24 @@ describe("neutral exact-exit signing boundary", () => {
     expect(validateAllowanceForAction("CLAIM", readyAllowance)).toBe(exhaustedAllowance);
     expect(validateAllowanceForAction("CANCEL_REFUND", readyAllowance)).toBe(exhaustedAllowance);
     expect(() => validateAllowanceForAction("CLAIM", exhaustedAllowance)).toThrow(/wrong_exact_pool_allowance/);
+  });
+
+  it("reports capacity exhausted when the sponsorship ledger cannot reserve a full exit", () => {
+    const ready = { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" } as const;
+    const base = { reservedTodayFri: "0", spentTodayFri: "0", reservedCount: 0, submittedCount: 0, sponsorshipFrozen: false };
+    expect(applyLedgerCapacity(ready, base)).toEqual(ready);
+    for (const unavailable of [
+      { ...base, reservedTodayFri: "1", reservedCount: 1 },
+      { ...base, submittedCount: 1 },
+      { ...base, spentTodayFri: "1" },
+      { ...base, sponsorshipFrozen: true },
+    ]) {
+      expect(applyLedgerCapacity(ready, unavailable)).toMatchObject({
+        status: "exhausted",
+        reason: "ledger",
+        fundingStatus: "exhausted",
+      });
+    }
   });
 
   it("reconciles an already-submitted private exit instead of leaving the nonce lane blocked", async () => {

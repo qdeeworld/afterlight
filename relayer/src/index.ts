@@ -78,7 +78,8 @@ export default {
         await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
         if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
-          requireFundingAdmission(await readClaimCapacity(env));
+          const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
+          requireFundingAdmission(await readClaimCapacity(env, budget));
         }
         plan = await prepareCheckpointPlan(env, Date.now());
       } else {
@@ -222,7 +223,7 @@ async function health(request: Request, env: Env): Promise<Response> {
         ),
     submitDisabled || !readiness.executable
       ? Promise.resolve({ status: "unknown" as const, reason: "configuration" as const, fundingStatus: "unknown" as const, fundingReason: "configuration" as const })
-      : readClaimCapacity(env),
+      : readClaimCapacity(env, env.RELAY_BUDGET.getByName(budgetObjectName(env))),
   ]);
   const ready = !submitDisabled && readiness.executable && balance.status === "ok";
   const origin = request.headers.get("origin");

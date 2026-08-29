@@ -73,12 +73,12 @@ export type ExitResult = Readonly<{
 
 export type ClaimCapacity = Readonly<{
   status: "ready" | "exhausted" | "unknown";
-  reason: "ready" | "allowance" | "balance" | "configuration";
+  reason: "ready" | "allowance" | "balance" | "ledger" | "configuration";
   fundingStatus: "ready" | "exhausted" | "unknown";
   fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
 }>;
 
-export async function readClaimCapacity(env: Env): Promise<ClaimCapacity> {
+export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinator, "snapshot">): Promise<ClaimCapacity> {
   try {
     const provider = new RpcProvider({
       nodeUrl: env.EXIT_RPC_URL,
@@ -114,12 +114,33 @@ export async function readClaimCapacity(env: Env): Promise<ClaimCapacity> {
     const required = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri) + BigInt(EXIT_POLICY.postSpendHealthFloorFri);
     if (balance < required) return exhaustedCapacity("balance");
     const liability = parseU256Result(liabilityRaw, "liability");
-    return liability === 0n
+    const chainCapacity: ClaimCapacity = liability === 0n
       ? { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" }
       : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
+    if (budget === undefined) return chainCapacity;
+    return applyLedgerCapacity(chainCapacity, await budget.snapshot(new Date().toISOString().slice(0, 10), "exit"));
   } catch {
     return unknownCapacity();
   }
+}
+
+export function applyLedgerCapacity(
+  chainCapacity: ClaimCapacity,
+  snapshot: Readonly<{
+    reservedTodayFri: string;
+    spentTodayFri: string;
+    reservedCount: number;
+    submittedCount: number;
+    sponsorshipFrozen: boolean;
+  }>,
+): ClaimCapacity {
+  if (chainCapacity.status !== "ready") return chainCapacity;
+  const active = snapshot.reservedCount + snapshot.submittedCount > 0;
+  const projected = BigInt(snapshot.reservedTodayFri) + BigInt(snapshot.spentTodayFri) + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
+  if (snapshot.sponsorshipFrozen || active || projected > BigInt(EXIT_POLICY.maxNetworkFeePerExitFri)) {
+    return { status: "exhausted", reason: "ledger", fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+  }
+  return chainCapacity;
 }
 
 function unknownCapacity(): ClaimCapacity {
