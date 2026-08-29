@@ -112,7 +112,7 @@ describe("neutral exact-exit signing boundary", () => {
       waitForTransaction: vi.fn().mockResolvedValue({
         isError: () => false,
         isReverted: () => false,
-        value: { transaction_hash: transactionHash, actual_fee: { amount: "70" } },
+        value: { transaction_hash: transactionHash, actual_fee: { amount: "70", unit: "FRI" } },
       }),
     } as any;
     const budget = {
@@ -132,6 +132,7 @@ describe("neutral exact-exit signing boundary", () => {
     ["malformed object", {}],
     ["malformed amount", { amount: "not-a-fee" }],
     ["zero", { amount: "0x0" }],
+    ["missing structured unit", { amount: "70" }],
     ["non-FRI unit", { amount: "70", unit: "WEI" }],
     ["malformed unit", { amount: "70", unit: null }],
   ])("keeps an accepted receipt with a %s actual fee uncertain", async (_label, actualFee) => {
@@ -161,7 +162,7 @@ describe("neutral exact-exit signing boundary", () => {
     vi.spyOn(RpcProvider.prototype, "waitForTransaction").mockResolvedValue({
       isError: () => false,
       isReverted: () => false,
-      value: { transaction_hash: transactionHash, actual_fee: { amount: "70" } },
+      value: { transaction_hash: transactionHash, actual_fee: { amount: "70", unit: "FRI" } },
     } as any);
     const budget = {
       lookup: vi.fn().mockResolvedValue({

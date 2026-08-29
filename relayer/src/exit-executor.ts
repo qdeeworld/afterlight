@@ -544,7 +544,7 @@ function hex(value: string | bigint): string { return `0x${BigInt(value).toStrin
 function readFee(value: unknown): string {
   if (typeof value === "object" && value !== null) {
     const unit = (value as Record<string, unknown>).unit;
-    if (unit !== undefined && unit !== "FRI") throw new ExitExecutorError("exit_uncertain");
+    if (unit !== "FRI") throw new ExitExecutorError("exit_uncertain");
   }
   const amount = typeof value === "string"
     ? value
