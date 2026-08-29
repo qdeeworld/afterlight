@@ -55,6 +55,7 @@ const expected = {
 
 const sameFelt = (left, right) => BigInt(left) === BigInt(right);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
+const unwrapRpcValue = (response) => response?.value ?? response;
 const succeeded = (receipt) =>
   receipt.execution_status === "SUCCEEDED" && receipt.finality_status === "ACCEPTED_ON_L1";
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -64,7 +65,7 @@ const getL1Receipt = async (transactionHash) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     for (const receiptProvider of receiptProviders) {
       try {
-        receipt = await receiptProvider.getTransactionReceipt(transactionHash);
+        receipt = unwrapRpcValue(await receiptProvider.getTransactionReceipt(transactionHash));
         if (succeeded(receipt)) return receipt;
       } catch (error) {
         lastError = error;
@@ -106,7 +107,7 @@ assert(declaration.transactions.length === 5, "Expected exactly five qualifying 
 
 for (const transactionHash of declaration.transactions) {
   const [receipt, transaction] = await Promise.all([
-    getL1Receipt(transactionHash), provider.getTransaction(transactionHash),
+    getL1Receipt(transactionHash), provider.getTransactionByHash(transactionHash),
   ]);
   assert(hasEventFrom(receipt, expected.pool), `${transactionHash} does not touch the canonical pool.`);
   assert(hasEventFrom(receipt, expected.contract) || calldataContains(transaction, expected.contract), `${transactionHash} is not owned by Afterlight.`);
@@ -118,7 +119,7 @@ for (const transactionHash of declaration.transactions) {
 
 for (const transactionHash of expected.controls) {
   const [receipt, transaction] = await Promise.all([
-    getL1Receipt(transactionHash), provider.getTransaction(transactionHash),
+    getL1Receipt(transactionHash), provider.getTransactionByHash(transactionHash),
   ]);
   assert(sameFelt(transaction.sender_address, expected.neutral), `${transactionHash} was not submitted by the neutral relayer.`);
   assert(hasEventFrom(receipt, expected.contract), `${transactionHash} has no Afterlight event.`);
