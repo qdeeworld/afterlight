@@ -90,13 +90,22 @@ export interface BudgetCoordinator {
     exactFingerprint: string,
     expectedTransactionHash: string,
     preparedPayload: string,
+    ownerToken: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
   release(
     semanticKey: string,
     exactFingerprint: string,
+    ownerToken: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
+  takeoverHashless(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): Promise<{ acquired: boolean }>;
   finalize(
     semanticKey: string,
     exactFingerprint: string,
@@ -168,6 +177,8 @@ export async function executeRelayPlan(
 ): Promise<ExecutionResult> {
   if (!policy.submitEnabled) throw new ExecutorError("submission_disabled");
   const dayKey = utcDayKey(nowMs);
+  const ownerToken = reservationOwnerToken();
+  let adoptedMaxFeeFri: string | null = null;
   const prior = await budget.lookup(plan.semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     if (
@@ -197,7 +208,15 @@ export async function executeRelayPlan(
       prior.preparedPayload === null &&
       prior.exactFingerprint === plan.fingerprint
     ) {
-      await budget.release(plan.semanticKey, plan.fingerprint, nowMs);
+      const takeover = await budget.takeoverHashless(
+        plan.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(prior.state, prior.transactionHash);
+      adoptedMaxFeeFri = prior.maxFeeFri;
     } else {
       return duplicateResult(prior.state, prior.transactionHash);
     }
@@ -207,7 +226,9 @@ export async function executeRelayPlan(
   // A Worker request can end after broadcast but before receipt reconciliation.
   // Recover the one serialized SUBMITTED exposure by its stable exact call
   // fingerprint before reserving a new time-bucket semantic key.
-  const active = await budget.findActiveByFingerprint?.(plan.fingerprint);
+  const active = adoptedMaxFeeFri === null
+    ? await budget.findActiveByFingerprint?.(plan.fingerprint)
+    : undefined;
   if (active?.outcome === "found") {
     const activePlan = Object.freeze({ ...plan, semanticKey: active.semanticKey });
     if (active.state === "submitted" && active.transactionHash !== null) {
@@ -231,7 +252,16 @@ export async function executeRelayPlan(
       );
     }
     if (active.state === "reserved" && active.transactionHash === null && active.preparedPayload === null) {
-      await budget.release(active.semanticKey, plan.fingerprint, nowMs);
+      const takeover = await budget.takeoverHashless(
+        active.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(active.state, active.transactionHash);
+      plan = activePlan;
+      adoptedMaxFeeFri = active.maxFeeFri;
     } else {
       return duplicateResult(active.state, active.transactionHash);
     }
@@ -264,8 +294,11 @@ export async function executeRelayPlan(
   }
 
   const maxFeeFri = authorization.transactionMaxFeeFri.toString();
-  let reservation: BudgetReserveResult;
-  try {
+  if (adoptedMaxFeeFri !== null && BigInt(maxFeeFri) > BigInt(adoptedMaxFeeFri)) {
+    throw new ExecutorError("fee_policy_rejected");
+  }
+  let reservation: BudgetReserveResult | undefined;
+  if (adoptedMaxFeeFri === null) try {
     reservation = await budget.reserve({
       budgetClass: "control",
       dayKey,
@@ -274,6 +307,7 @@ export async function executeRelayPlan(
       maxFeeFri,
       perCallCapFri: policy.perCallCapFri.toString(),
       dailyBudgetFri: policy.dailyBudgetFri.toString(),
+      ownerToken,
       nowMs,
     });
   } catch (error) {
@@ -282,7 +316,7 @@ export async function executeRelayPlan(
     }
     throw error;
   }
-  if (reservation.outcome !== "reserved") {
+  if (reservation !== undefined && reservation.outcome !== "reserved") {
     const raced = await budget.lookup(plan.semanticKey);
     if (raced.outcome === "found" && raced.state !== "released") {
       return duplicateResult(raced.state, raced.transactionHash);
@@ -302,6 +336,7 @@ export async function executeRelayPlan(
           plan.fingerprint,
           expectedTransactionHash,
           preparedPayload,
+          ownerToken,
           nowMs,
         );
         if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
@@ -315,7 +350,7 @@ export async function executeRelayPlan(
     throw new ExecutorError("submission_uncertain");
   }
   if (!submission.submitted) {
-    await budget.release(plan.semanticKey, plan.fingerprint, nowMs);
+    await budget.release(plan.semanticKey, plan.fingerprint, ownerToken, nowMs);
     throw new ExecutorError("submission_not_started");
   }
   if (
@@ -343,6 +378,12 @@ export async function executeRelayPlan(
     budget,
     nowMs,
   );
+}
+
+export function reservationOwnerToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 async function rebroadcastPreparedControl(

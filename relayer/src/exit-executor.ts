@@ -1,5 +1,5 @@
 import { Account, RpcProvider, transaction, type Call } from "starknet";
-import type { BudgetCoordinator } from "./executor.js";
+import { reservationOwnerToken, type BudgetCoordinator } from "./executor.js";
 import {
   LOCKED_POOL_CLASS_HASH,
   addResourceMargins,
@@ -207,6 +207,8 @@ export async function executePreparedExit(
     headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
     plugins: false,
   });
+  const ownerToken = reservationOwnerToken();
+  let adoptedMaxFeeFri: string | null = null;
   const prior = await budget.lookup(semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     if (
@@ -237,7 +239,15 @@ export async function executePreparedExit(
       prior.preparedPayload === null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
-      await budget.release(semanticKey, validated.bindingSha256, Date.now());
+      const takeover = await budget.takeoverHashless(
+        semanticKey,
+        validated.bindingSha256,
+        ownerToken,
+        Date.now(),
+        120_000,
+      );
+      if (!takeover.acquired) return { status: "duplicate", transactionHash: null };
+      adoptedMaxFeeFri = prior.maxFeeFri;
     } else {
       return { status: "duplicate", transactionHash: prior.transactionHash };
     }
@@ -300,6 +310,7 @@ export async function executePreparedExit(
     networkCap = resourceCapFri(bounds);
     if (networkCap > policy.networkCapFri) throw new Error("network_cap");
     validateBalanceForExit(snapshot.balance, networkCap, BigInt(EXIT_POLICY.postSpendHealthFloorFri));
+    if (adoptedMaxFeeFri !== null && networkCap > BigInt(adoptedMaxFeeFri)) throw new Error("adopted_network_cap");
   } catch { throw exitStage("fee_and_balance"); }
 
   // A successful authenticated simulation proves the application signature,
@@ -307,7 +318,7 @@ export async function executePreparedExit(
   // vault/action quota. Invalid callers remain bounded only by global ingress.
   await afterAuthenticated?.();
 
-  const reservation = await budget.reserve({
+  const reservation = adoptedMaxFeeFri === null ? await budget.reserve({
     budgetClass: "exit",
     dayKey: new Date().toISOString().slice(0, 10),
     semanticKey,
@@ -315,9 +326,10 @@ export async function executePreparedExit(
     maxFeeFri: networkCap.toString(),
     perCallCapFri: policy.networkCapFri.toString(),
     dailyBudgetFri: policy.networkCapFri.toString(),
+    ownerToken,
     nowMs: Date.now(),
-  });
-  if (reservation.outcome !== "reserved") {
+  }) : undefined;
+  if (reservation !== undefined && reservation.outcome !== "reserved") {
     const duplicate = await budget.lookup(semanticKey);
     return { status: "duplicate", transactionHash: duplicate.outcome === "found" ? duplicate.transactionHash : null };
   }
@@ -362,6 +374,7 @@ export async function executePreparedExit(
       validated.bindingSha256,
       expectedHash,
       preparedPayload,
+      ownerToken,
       Date.now(),
     );
     if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
@@ -395,7 +408,7 @@ export async function executePreparedExit(
   } catch (error) {
     if (!broadcastStarted) {
       try {
-        await budget.release(semanticKey, validated.bindingSha256, Date.now());
+        await budget.release(semanticKey, validated.bindingSha256, ownerToken, Date.now());
       } catch {
         // Preserve the original pre-broadcast failure. Cleanup diagnostics are
         // payload-free and must never turn a safe failed attempt into a generic

@@ -16,6 +16,7 @@ export type BudgetReserveInput = Readonly<{
   maxFeeFri: string;
   perCallCapFri: string;
   dailyBudgetFri: string;
+  ownerToken: string;
   nowMs: number;
 }>;
 
@@ -102,6 +103,8 @@ export type FundingAdmissionResult = Readonly<{
   expiresAtMs: number | null;
 }>;
 
+export type HashlessTakeoverResult = Readonly<{ acquired: boolean }>;
+
 export class BudgetError extends Error {
   readonly code:
     | "invalid_budget_input"
@@ -113,6 +116,7 @@ export class BudgetError extends Error {
     | "reservation_missing"
     | "reservation_not_releasable"
     | "reservation_not_submitted"
+    | "reservation_owner_mismatch"
     | "exact_fingerprint_mismatch";
 
   constructor(code: BudgetError["code"]) {
@@ -132,6 +136,8 @@ type ReservationRow = Readonly<{
   status: "RESERVED" | "SUBMITTED" | "RELEASED" | "COMMITTED" | "REVERTED" | "BREACHED";
   transaction_hash: string | null;
   prepared_payload: string | null;
+  owner_token: string | null;
+  updated_at_ms: number;
 }>;
 
 type TotalsRow = Readonly<{
@@ -204,6 +210,9 @@ export class RelayBudget extends DurableObject<Env> {
         "ALTER TABLE reservations ADD COLUMN prepared_payload TEXT",
       );
     }
+    if (!reservationColumns.some(({ name }) => name === "owner_token")) {
+      this.ctx.storage.sql.exec("ALTER TABLE reservations ADD COLUMN owner_token TEXT");
+    }
     // The legacy ledger did not identify whether a reservation paid for a
     // control or exit transaction. Preserve its aggregate against both class
     // ceilings until UTC rollover. Double-counting across independent class
@@ -243,7 +252,7 @@ export class RelayBudget extends DurableObject<Env> {
     const rows = this.ctx.storage.sql
       .exec<ReservationRow>(
         `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-                status, transaction_hash, prepared_payload
+                status, transaction_hash, prepared_payload, owner_token, updated_at_ms
          FROM reservations
          WHERE exact_fingerprint = ? AND status IN ('RESERVED', 'SUBMITTED')`,
         exact,
@@ -293,25 +302,27 @@ export class RelayBudget extends DurableObject<Env> {
         this.ctx.storage.sql.exec(
           `INSERT INTO reservations
              (semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-              status, transaction_hash, prepared_payload, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, NULL, 'RESERVED', NULL, NULL, ?)`,
+              status, transaction_hash, prepared_payload, owner_token, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, NULL, 'RESERVED', NULL, NULL, ?, ?)`,
           normalized.semanticKey,
           normalized.budgetClass,
           normalized.exactFingerprint,
           normalized.dayKey,
           normalized.maxFeeFri,
+          normalized.ownerToken,
           normalized.nowMs,
         );
       } else {
         this.ctx.storage.sql.exec(
           `UPDATE reservations
            SET budget_class = ?, exact_fingerprint = ?, day_key = ?, max_fee_fri = ?, actual_fee_fri = NULL,
-               status = 'RESERVED', transaction_hash = NULL, prepared_payload = NULL, updated_at_ms = ?
+               status = 'RESERVED', transaction_hash = NULL, prepared_payload = NULL, owner_token = ?, updated_at_ms = ?
            WHERE semantic_key = ?`,
           normalized.budgetClass,
           normalized.exactFingerprint,
           normalized.dayKey,
           normalized.maxFeeFri,
+          normalized.ownerToken,
           normalized.nowMs,
           normalized.semanticKey,
         );
@@ -366,17 +377,20 @@ export class RelayBudget extends DurableObject<Env> {
     exactFingerprint: string,
     expectedTransactionHash: string,
     preparedPayload: string,
+    ownerToken: string,
     nowMs: number,
   ): BudgetMutationResult {
     const semantic = validKey(semanticKey);
     const exact = validKey(exactFingerprint);
     const hash = validTransactionHash(expectedTransactionHash);
     const payload = validPreparedPayload(preparedPayload);
+    const owner = validKey(ownerToken);
     const timestamp = validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
       const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
+      if (row.owner_token !== owner) throw new BudgetError("reservation_owner_mismatch");
       if (row.status === "RESERVED" && row.transaction_hash === hash && row.prepared_payload === payload) {
         return mutationResult("already_prepared", totals, this.isFrozen());
       }
@@ -396,14 +410,16 @@ export class RelayBudget extends DurableObject<Env> {
     });
   }
 
-  release(semanticKey: string, exactFingerprint: string, nowMs: number): BudgetMutationResult {
+  release(semanticKey: string, exactFingerprint: string, ownerToken: string, nowMs: number): BudgetMutationResult {
     const semantic = validKey(semanticKey);
     const exact = validKey(exactFingerprint);
+    const owner = validKey(ownerToken);
     const timestamp = validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
       const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
+      if (row.owner_token !== owner) throw new BudgetError("reservation_owner_mismatch");
       if (row.status === "RELEASED") return mutationResult("already_released", totals, this.isFrozen());
       const terminal = terminalMutationOutcome(row.status);
       if (terminal !== undefined) return mutationResult(terminal, totals, this.isFrozen());
@@ -417,6 +433,41 @@ export class RelayBudget extends DurableObject<Env> {
       );
       this.writeTotals(row.budget_class, row.day_key, next);
       return mutationResult("released", next, this.isFrozen());
+    });
+  }
+
+  takeoverHashless(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): HashlessTakeoverResult {
+    const semantic = validKey(semanticKey);
+    const exact = validKey(exactFingerprint);
+    const owner = validKey(newOwnerToken);
+    const timestamp = validTimestamp(nowMs);
+    if (!Number.isSafeInteger(staleAfterMs) || staleAfterMs < 60_000 || staleAfterMs > 600_000) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const row = this.requiredReservation(semantic);
+      if (
+        row.exact_fingerprint !== exact ||
+        row.status !== "RESERVED" ||
+        row.transaction_hash !== null ||
+        row.prepared_payload !== null ||
+        timestamp - row.updated_at_ms < staleAfterMs
+      ) {
+        return { acquired: false };
+      }
+      this.ctx.storage.sql.exec(
+        "UPDATE reservations SET owner_token = ?, updated_at_ms = ? WHERE semantic_key = ?",
+        owner,
+        timestamp,
+        semantic,
+      );
+      return { acquired: true };
     });
   }
 
@@ -602,7 +653,7 @@ export class RelayBudget extends DurableObject<Env> {
     return this.ctx.storage.sql
       .exec<ReservationRow>(
         `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-                status, transaction_hash, prepared_payload
+                status, transaction_hash, prepared_payload, owner_token, updated_at_ms
          FROM reservations WHERE semantic_key = ?`,
         semanticKey,
       )
@@ -635,6 +686,7 @@ function validateReserveInput(input: BudgetReserveInput): BudgetReserveInput {
     maxFeeFri: decimal(input.maxFeeFri).toString(),
     perCallCapFri: decimal(input.perCallCapFri).toString(),
     dailyBudgetFri: decimal(input.dailyBudgetFri).toString(),
+    ownerToken: validKey(input.ownerToken),
     nowMs: validTimestamp(input.nowMs),
   };
 }

@@ -187,7 +187,7 @@ describe("neutral exact-exit signing boundary", () => {
     expect(afterAuthenticated).not.toHaveBeenCalled();
   });
 
-  it("releases an exact hashless pre-broadcast exit reservation before the kill switch", async () => {
+  it("does not take over a live hashless pre-broadcast exit reservation", async () => {
     const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
     const budget = {
       lookup: vi.fn().mockResolvedValue({
@@ -197,17 +197,19 @@ describe("neutral exact-exit signing boundary", () => {
         transactionHash: null,
         preparedPayload: null,
       }),
-      release: vi.fn().mockResolvedValue({ outcome: "released" }),
+      takeoverHashless: vi.fn().mockResolvedValue({ acquired: false }),
     } as any;
     await expect(executePreparedExit("{}", {
       SUBMIT_ENABLED: "false",
       EXIT_RPC_URL: "https://rpc.invalid",
       STARKNET_RPC_AUTH_TOKEN: "configured",
-    } as any, budget, validated)).rejects.toMatchObject({ code: "exit_unavailable" });
-    expect(budget.release).toHaveBeenCalledWith(
+    } as any, budget, validated)).resolves.toEqual({ status: "duplicate", transactionHash: null });
+    expect(budget.takeoverHashless).toHaveBeenCalledWith(
       validated.bindingSha256,
       validated.bindingSha256,
+      expect.stringMatching(/^[0-9a-f]{64}$/),
       expect.any(Number),
+      120_000,
     );
   });
 

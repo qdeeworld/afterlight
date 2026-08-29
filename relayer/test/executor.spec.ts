@@ -19,6 +19,7 @@ import {
 
 const nowMs = Date.UTC(2026, 7, 24, 12);
 const day = "2026-08-24";
+const seededOwner = "a".repeat(64);
 const plan: RelayPlan = Object.freeze({
   schema: "afterlight-relay-plan/1",
   operation: "HEARTBEAT",
@@ -133,7 +134,7 @@ describe("fail-closed exact-call executor", () => {
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
   });
 
-  it("safely releases an exact hashless pre-broadcast reservation before retrying", async () => {
+  it("takes over an exact hashless reservation only after its owner lease expires", async () => {
     const adapter = fakeAdapter();
     const budget = freshBudget();
     await budget.reserve({
@@ -144,10 +145,16 @@ describe("fail-closed exact-call executor", () => {
       maxFeeFri: "110",
       perCallCapFri: "200",
       dailyBudgetFri: "1000",
+      ownerToken: seededOwner,
       nowMs,
     });
 
-    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 1)).resolves.toMatchObject({
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 1)).resolves.toEqual({
+      status: "duplicate",
+      state: "reserved",
+      transactionHash: null,
+    });
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
     });
@@ -165,9 +172,10 @@ describe("fail-closed exact-call executor", () => {
       maxFeeFri: "110",
       perCallCapFri: "200",
       dailyBudgetFri: "1000",
+      ownerToken: seededOwner,
       nowMs,
     });
-    await budget.markPrepared(plan.semanticKey, plan.fingerprint, "0xabc", "{}", nowMs + 1);
+    await budget.markPrepared(plan.semanticKey, plan.fingerprint, "0xabc", "{}", seededOwner, nowMs + 1);
     const nextBucket = { ...plan, semanticKey: "b".repeat(64) };
 
     await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 2)).resolves.toMatchObject({

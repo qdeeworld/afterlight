@@ -8,6 +8,8 @@ const dayTwo = "2026-08-25";
 const semantic = "a".repeat(64);
 const exact = "b".repeat(64);
 const alternateExact = "c".repeat(64);
+const owner = "d".repeat(64);
+const alternateOwner = "e".repeat(64);
 
 describe("deployment-wide sponsorship coordinator", () => {
   it("reserves, deduplicates, releases, records SUBMITTED, and commits exactly once", async () => {
@@ -21,8 +23,8 @@ describe("deployment-wide sponsorship coordinator", () => {
     expect((await budget.reserve(reserveInput(semantic, alternateExact))).outcome).toBe(
       "duplicate_reserved",
     );
-    expect((await budget.release(semantic, exact, 2)).outcome).toBe("released");
-    expect((await budget.release(semantic, exact, 3)).outcome).toBe("already_released");
+    expect((await budget.release(semantic, exact, owner, 2)).outcome).toBe("released");
+    expect((await budget.release(semantic, exact, owner, 3)).outcome).toBe("already_released");
 
     expect((await budget.reserve(reserveInput(semantic, alternateExact, "100", dayOne, 4))).outcome)
       .toBe("reserved");
@@ -36,7 +38,7 @@ describe("deployment-wide sponsorship coordinator", () => {
       transactionHash: "0xabc",
     });
     await runInDurableObject(budget, async (instance: RelayBudget) => {
-      expect(() => instance.release(semantic, alternateExact, 6)).toThrowError(
+      expect(() => instance.release(semantic, alternateExact, owner, 6)).toThrowError(
         "reservation_not_releasable",
       );
     });
@@ -63,8 +65,8 @@ describe("deployment-wide sponsorship coordinator", () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput());
     const prepared = JSON.stringify({ signed: "exact-artifact" });
-    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, 2)).outcome).toBe("prepared");
-    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, 3)).outcome).toBe("already_prepared");
+    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, owner, 2)).outcome).toBe("prepared");
+    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, owner, 3)).outcome).toBe("already_prepared");
     expect(await budget.lookup(semantic)).toMatchObject({
       state: "reserved",
       transactionHash: "0xabc",
@@ -75,7 +77,7 @@ describe("deployment-wide sponsorship coordinator", () => {
         "idempotency_conflict",
       );
     });
-    expect((await budget.release(semantic, exact, 5)).outcome).toBe("released");
+    expect((await budget.release(semantic, exact, owner, 5)).outcome).toBe("released");
     expect(await budget.snapshot(dayOne)).toMatchObject({ reservedTodayFri: "0" });
   });
 
@@ -173,7 +175,7 @@ describe("deployment-wide sponsorship coordinator", () => {
         instance.reserve(reserveInput("d".repeat(64), alternateExact, "10", dayOne, 2)),
       ).toThrowError("relayer_busy");
     });
-    await budget.release(semantic, exact, 3);
+    await budget.release(semantic, exact, owner, 3);
     expect(
       (await budget.reserve(reserveInput("d".repeat(64), alternateExact, "10", dayOne, 4)))
         .outcome,
@@ -197,6 +199,22 @@ describe("deployment-wide sponsorship coordinator", () => {
       reservedCount: 0,
       submittedCount: 1,
     });
+  });
+
+  it("allows only an expired hashless owner lease to be taken over", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput());
+    expect(await budget.takeoverHashless(semantic, exact, alternateOwner, 120_000, 120_000)).toEqual({ acquired: false });
+    expect(await budget.takeoverHashless(semantic, exact, alternateOwner, 120_001, 120_000)).toEqual({ acquired: true });
+    await runInDurableObject(budget, async (instance: RelayBudget) => {
+      expect(() => instance.markPrepared(semantic, exact, "0xabc", "{}", owner, 120_002)).toThrowError(
+        "reservation_owner_mismatch",
+      );
+      expect(() => instance.release(semantic, exact, owner, 120_002)).toThrowError(
+        "reservation_owner_mismatch",
+      );
+    });
+    expect((await budget.markPrepared(semantic, exact, "0xabc", "{}", alternateOwner, 120_003)).outcome).toBe("prepared");
   });
 
   it("keeps semantic idempotency global while UTC totals roll over", async () => {
@@ -288,6 +306,7 @@ function reserveInput(
     maxFeeFri,
     perCallCapFri: "200",
     dailyBudgetFri: "1000",
+    ownerToken: owner,
     nowMs,
   } as const;
 }
