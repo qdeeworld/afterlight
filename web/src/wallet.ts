@@ -2,7 +2,8 @@ import { createStore } from "@starknet-io/get-starknet-discovery";
 import { WalletAccountV6, walletV6, num, type RpcProvider } from "starknet";
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
-import { CHAIN_ID, READY_VERSION } from "./config.ts";
+import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
+import { isCompatibleReadyVersion } from "./compatibility.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -40,7 +41,7 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
   if (!wallet) throw new Error("Ready X was not detected in this browser profile.");
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
-  if (feature.walletVersion !== READY_VERSION) throw new Error(`Ready X ${READY_VERSION} is required; detected ${String(feature.walletVersion)}.`);
+  if (!isCompatibleReadyVersion(feature.walletVersion)) throw new Error(`Ready X ${READY_MIN_VERSION} or a compatible Ready 5.x release is required; detected ${String(feature.walletVersion)}.`);
   // This function runs only from the explicit Connect Ready X button. Use the
   // interactive Wallet Standard flow so a profile that has not authorized
   // Afterlight yet can actually approve the connection. Silent mode is only
@@ -66,7 +67,7 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
 
   return {
     name: wallet.name,
-    version: READY_VERSION,
+    version: String(feature.walletVersion),
     address,
     chainId,
     balance: async (token) => {

@@ -4,10 +4,10 @@
 
 This is the Ready X flow implemented by the public Afterlight interface and
 exercised by the deployed Mainnet mechanism. The contract and a complete
-founder-operated lifecycle exist. The public interface is live, while a fresh
-end-to-end E3 completion through that interface and unrelated-user E4
-completion remain pending. Nothing in this document is a standing instruction
-to fund or sign; users must review the live wallet request and current fees.
+founder-operated E3 lifecycle through the public interface exist. An unrelated
+owner-successor E4 completion remains pending. Nothing in this document is a
+standing instruction to fund or sign; users must review the live wallet request
+and current fees.
 
 ## Accounts and STRK20 prerequisites
 
@@ -26,6 +26,11 @@ reserve. Each payer also needs sufficient public or shielded funds for the
 then-current account, registration, protocol-fee, and gas route. Fees and
 account state must be freshly quoted in Ready X; this document deliberately
 does not present an old estimate as a funding instruction.
+
+The public app requires Ready X `5.33.9` or a later compatible Ready `5.x`
+release and verifies the Wallet API capabilities it uses. An incompatible
+major release fails closed with the detected version instead of silently
+attempting a transaction.
 
 Keep the Ready account key, the Afterlight application key, and destination
 note material separate. Never paste a Ready seed or private key into Afterlight,
@@ -47,8 +52,8 @@ The current client library can export a key only through the explicit
 That JSON contains the application private key and is **not encrypted by the
 library**. Treat it like a signing secret: encrypt it with a user-controlled
 method, store it offline, test restoration before funding, and never upload it
-to the relayer. A production UI must make backup/import and this plaintext
-library boundary explicit.
+to the relayer. The public UI labels this plaintext boundary and requires a
+successful local restore before it enables funding.
 
 ## Owner journey
 

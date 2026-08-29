@@ -17,8 +17,44 @@ let invitationText = localStorage.getItem("afterlight:invitation:v1") ?? "";
 let vault: VaultSnapshot | undefined;
 let notice = "Loading the live Starknet Mainnet product…";
 let busy = false;
-let transactionHash = "";
 let costAcknowledged = false;
+let backupState: "needed" | "downloaded" | "verified" = "needed";
+
+type ReceiptEvidence = Readonly<{
+  hash: string;
+  label: string;
+  vaultId?: string;
+  recordedAt: string;
+}>;
+
+const RECEIPT_STORAGE_KEY = "afterlight:receipts:v1";
+
+function restoreReceipts(): ReceiptEvidence[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECEIPT_STORAGE_KEY) ?? "[]") as unknown;
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry): entry is ReceiptEvidence => {
+      if (typeof entry !== "object" || entry === null) return false;
+      const item = entry as Partial<ReceiptEvidence>;
+      return /^0x[0-9a-f]{1,64}$/i.test(item.hash ?? "")
+        && typeof item.label === "string"
+        && item.label.length > 0
+        && item.label.length <= 80
+        && (item.vaultId === undefined || /^0x[0-9a-f]{1,64}$/i.test(item.vaultId))
+        && typeof item.recordedAt === "string";
+    }).slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+let receipts = restoreReceipts();
+
+function recordReceipt(hash: string, label: string, vaultId?: string): void {
+  const evidence = Object.freeze({ hash: num.toHex(BigInt(hash)), label, vaultId, recordedAt: new Date().toISOString() });
+  receipts = [evidence, ...receipts.filter((item) => item.hash !== evidence.hash)].slice(0, 8);
+  localStorage.setItem(RECEIPT_STORAGE_KEY, JSON.stringify(receipts));
+}
 type PendingExit = Readonly<{
   action: "CANCEL_REFUND" | "CLAIM";
   vaultId: string;
@@ -155,8 +191,9 @@ function keyPanel(person: "owner" | "successor"): string {
   const isCurrent = role === person;
   return `<section class="key-panel"><div class="section-heading"><span class="step-number">${person === "owner" ? "02" : "01"}</span>
     <div><strong>${person === "owner" ? "Create your owner control key" : "Prepare your successor key"}</strong><p>Generated locally for one vault. The secret never reaches the relayer or Ready X.</p></div></div>
-    ${applicationKey && isCurrent ? `<code>${escapeHtml(applicationKey.publicKey)}</code><div class="button-row"><button class="button secondary" data-action="copy-key">Copy public key</button><button class="button secondary" data-action="download-key">Download secret backup</button></div>` : `<button class="button secondary" data-action="generate-key">Generate ${person} key locally</button>`}
-    <details class="restore-key"><summary>Already have a key backup?</summary><label class="full-field"><span>Restore ${person} key backup</span><input data-key-file type="file" accept="application/json,.json" /><small>Read only on this device. Never share this file.</small></label></details>
+    ${applicationKey && isCurrent ? `<code>${escapeHtml(applicationKey.publicKey)}</code><div class="button-row"><button class="button secondary" data-action="copy-key">Copy public key</button><button class="button secondary" data-action="download-key">Download secret backup</button></div><p class="${backupState === "verified" ? "success" : "warning"}">${backupState === "verified" ? "Backup restored and verified on this device." : backupState === "downloaded" ? "Now restore the downloaded file below to verify it before funding." : "Download and restore this key backup before funding."}</p>` : `<button class="button secondary" data-action="generate-key">Generate ${person} key locally</button>`}
+    <aside class="secret-warning"><strong>Unencrypted signing secret</strong><p>This JSON backup is plaintext. Keep it offline, never share it, and never upload it anywhere except this local restore control.</p></aside>
+    <details class="restore-key" ${backupState === "downloaded" ? "open" : ""}><summary>Restore and verify a key backup</summary><label class="full-field"><span>Restore ${person} key backup</span><input data-key-file type="file" accept="application/json,.json" /><small>Read locally only. A successful restore proves the file before funding.</small></label></details>
   </section>`;
 }
 
@@ -170,6 +207,7 @@ function canFundReserve(): boolean {
     && privateBalance !== undefined
     && privateBalance >= 7n * 10n ** 18n
     && applicationKey !== undefined
+    && backupState === "verified"
     && /^0x[0-9a-f]{1,64}$/i.test(successorPublicKey)
     && costAcknowledged;
 }
@@ -182,6 +220,7 @@ function ownerView(): string {
     <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"} · 1 STRK</span></div>
     <p class="lede">Privately set aside 1 STRK. Heartbeat while active and veto a recovery request during grace.</p>
     ${journeyProgress()}
+    <details class="restore-reserve"><summary>Restore an existing owner reserve</summary><div class="restore-reserve-body"><label class="full-field"><span>Recovery invitation</span><textarea name="owner-invitation" rows="7" placeholder="Paste Afterlight invitation JSON">${escapeHtml(invitationText)}</textarea><small>Use this after browser storage loss. The package is checked locally against Mainnet before controls are enabled.</small></label><button class="button secondary" data-action="validate-owner-invitation">Verify and load reserve</button></div></details>
     ${walletRow()}
     ${keyPanel("owner")}
     <form id="reserve-form" class="setup-form"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>Both modes use fixed, contract-enforced terms.</p></div></div>
@@ -192,6 +231,7 @@ function ownerView(): string {
       <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : fundingCapacity === "unknown" ? "Recovery capacity unavailable" : !costAcknowledged ? "Confirm the 7 STRK cost to continue" : "Create and privately fund reserve"}</button>
       ${fundingCapacity === "exhausted" ? `<p class="error">The supported route already has an outstanding reserve or private-exit capacity needs replenishment. New funding stays paused; existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
+      ${applicationKey && backupState !== "verified" ? `<p class="error">Download and restore the owner key backup before funding.</p>` : ""}
     </form>
     ${invitation.valid ? controlPanel(invitation.invitation, liveControls ? vault : undefined) : ""}
   </section>`;
@@ -246,9 +286,12 @@ function statusPanel(): string {
   const parsed = parseInvitation(invitationText);
   const current = vault?.exists ? stateName(vault.state) : "Not loaded";
   const headline = current === "CLAIMED" ? "Recovery complete" : current === "CANCELLED" ? "Reserve returned" : current === "GRACE" ? "Owner still has control" : current === "ACTIVE" ? "Reserve protected" : "Private by design";
+  const contextualReceipts = receipts
+    .filter((item) => !parsed.valid || item.vaultId === undefined || item.vaultId === parsed.invitation.vaultId)
+    .slice(0, 3);
   return `<aside class="status-panel"><p class="status-label">${current === "Not loaded" ? "What Afterlight protects" : "Live outcome"}</p><strong>${headline}</strong><p>${parsed.valid ? `${current} · ${short(parsed.invitation.vaultId)}` : "Create or import a reserve to read its live state."}</p>
     <div class="trace"><div><span>✓</span><p><strong>Funding relationship</strong><small>Unlinked by STRK20</small></p></div><div><span>✓</span><p><strong>Heartbeat and veto wallet</strong><small>Hidden behind signed neutral relay</small></p></div><div><span>✓</span><p><strong>Recovery destination</strong><small>Bound to one exact private note</small></p></div><div class="public"><span>○</span><p><strong>Timing and denomination</strong><small>Remain public</small></p></div></div>
-    ${transactionHash ? `<a class="receipt" href="https://voyager.online/tx/${escapeHtml(transactionHash)}" target="_blank" rel="noreferrer">View latest Mainnet receipt ↗</a>` : ""}
+    ${contextualReceipts.length ? `<div class="receipt-history" aria-label="Recent Mainnet actions"><strong>Recent Mainnet actions</strong>${contextualReceipts.map((item) => `<a class="receipt" href="https://voyager.online/tx/${escapeHtml(item.hash)}" target="_blank" rel="noreferrer"><span>${escapeHtml(item.label)}</span><small>${new Date(item.recordedAt).toLocaleString()}</small></a>`).join("")}</div>` : ""}
     <details><summary>Truthful privacy boundary</summary><p>The contract, token, fixed denomination, application public keys, timing and state changes remain public. Ready wallet relationships and later private-note activity stay unlinked.</p></details></aside>`;
 }
 
@@ -283,6 +326,7 @@ function bindEvents(): void {
     role = button.dataset.role === "successor" ? "successor" : "owner";
     applicationKey?.destroy();
     applicationKey = undefined;
+    backupState = "needed";
     vault = undefined;
     history.replaceState(null, "", `/?role=${role}`);
     render();
@@ -302,6 +346,7 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("[data-action=generate-key]")?.addEventListener("click", () => {
     applicationKey?.destroy();
     applicationKey = generateKey();
+    backupState = "needed";
     if (role === "successor") successorPublicKey = applicationKey.publicKey;
     notice = `${role === "owner" ? "Owner" : "Successor"} key generated locally. Download its secret backup before leaving this page.`;
     render();
@@ -314,16 +359,19 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("[data-action=download-key]")?.addEventListener("click", () => {
     if (!applicationKey) return;
     download(`afterlight-${role}-key-${applicationKey.publicKey.slice(2, 10)}.json`, exportKey(applicationKey));
-    notice = "Secret backup downloaded. Store it safely and never send it to anyone.";
+    backupState = "downloaded";
+    notice = "Plaintext secret backup downloaded. Restore this exact file below before funding, then store it offline.";
     render();
   });
   document.querySelector<HTMLInputElement>("[data-key-file]")?.addEventListener("change", (event) => void run(async () => {
     const file = (event.currentTarget as HTMLInputElement).files?.[0];
     if (!file) throw new Error("Choose an Afterlight key backup.");
+    const restored = restoreKey(await file.text());
     applicationKey?.destroy();
-    applicationKey = restoreKey(await file.text());
+    applicationKey = restored;
+    backupState = "verified";
     if (role === "successor") successorPublicKey = applicationKey.publicKey;
-    notice = `${role === "owner" ? "Owner" : "Successor"} key restored locally.`;
+    notice = `${role === "owner" ? "Owner" : "Successor"} key backup restored and verified locally.`;
   }));
   document.querySelector<HTMLInputElement>("[name=successor-key]")?.addEventListener("input", (event) => {
     successorPublicKey = (event.currentTarget as HTMLInputElement).value.trim();
@@ -344,6 +392,19 @@ function bindEvents(): void {
     vault = undefined;
   });
   document.querySelector<HTMLButtonElement>("[data-action=validate-invitation]")?.addEventListener("click", () => render());
+  document.querySelector<HTMLTextAreaElement>("[name=owner-invitation]")?.addEventListener("input", (event) => {
+    invitationText = (event.currentTarget as HTMLTextAreaElement).value;
+    localStorage.setItem("afterlight:invitation:v1", invitationText);
+    vault = undefined;
+  });
+  document.querySelector<HTMLButtonElement>("[data-action=validate-owner-invitation]")?.addEventListener("click", () => void run(async () => {
+    const parsed = parseInvitation(invitationText);
+    if (!parsed.valid) throw new Error(parsed.reason);
+    vault = await readVault(parsed.invitation.vaultId);
+    if (!vault.exists) throw new Error("This vault does not exist on the deployed Afterlight contract.");
+    assertInvitationMatchesVault(parsed.invitation, vault);
+    notice = `Owner reserve restored from its invitation. Mainnet state: ${stateName(vault.state)}.`;
+  }));
   document.querySelector<HTMLFormElement>("#reserve-form")?.addEventListener("submit", (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
@@ -357,9 +418,10 @@ function bindEvents(): void {
       if (privateBalance === undefined || privateBalance < 7n * 10n ** 18n) throw new Error("At least 7 private STRK is required.");
       notice = "Requesting a fresh neutral funding checkpoint…"; render();
       const result = await fundRecoveryReserve({ ready, ownerKey: applicationKey, successorKey: successorPublicKey, mode: reserveMode,
-        onCheckpoint: (hash) => { transactionHash = hash; notice = "Checkpoint succeeded. Confirm the single private FUND transaction in Ready X."; render(); },
-        onSubmitted: (hash) => { transactionHash = hash; notice = "Private FUND submitted. Waiting for Mainnet success…"; render(); },
+        onCheckpoint: () => { notice = "Checkpoint succeeded. Confirm the single private FUND transaction in Ready X."; render(); },
+        onSubmitted: () => { notice = "Private FUND submitted. Waiting for Mainnet success…"; render(); },
       });
+      recordReceipt(result.transactionHash, "Private reserve funded", result.invitation.vaultId);
       invitationText = JSON.stringify(result.invitation, null, 2);
       localStorage.setItem("afterlight:invitation:v1", invitationText);
       download(`afterlight-invitation-${result.invitation.vaultId.slice(2, 10)}.json`, invitationText);
@@ -381,7 +443,8 @@ function bindEvents(): void {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !applicationKey) throw new Error("Import the invitation, live vault and correct key first.");
     const operation = button.dataset.control as "HEARTBEAT" | "REQUEST" | "VETO";
-    transactionHash = await relayControl(operation, parsed.invitation, vault, applicationKey);
+    const controlHash = await relayControl(operation, parsed.invitation, vault, applicationKey);
+    recordReceipt(controlHash, operation === "HEARTBEAT" ? "Heartbeat recorded" : operation === "REQUEST" ? "Recovery requested" : "Recovery vetoed", parsed.invitation.vaultId);
     vault = await readVault(parsed.invitation.vaultId);
     notice = `${operation === "HEARTBEAT" ? "Heartbeat recorded" : operation === "REQUEST" ? "Recovery grace opened" : "Recovery vetoed"}. Mainnet state is now ${stateName(vault.state)}.`;
   })));
@@ -416,7 +479,7 @@ function bindEvents(): void {
       throw error;
     }
     retainPendingExit(undefined);
-    transactionHash = result.transactionHash;
+    recordReceipt(result.transactionHash, "Reserve returned privately", parsed.invitation.vaultId);
     vault = await readVault(parsed.invitation.vaultId);
     privateBalance = await ready.balance(STRK);
     if (vault.state !== "4") throw new Error("The transaction succeeded but the vault is not CANCELLED. Do not retry.");
@@ -450,7 +513,7 @@ function bindEvents(): void {
       throw error;
     }
     retainPendingExit(undefined);
-    transactionHash = result.transactionHash;
+    recordReceipt(result.transactionHash, "Recovery completed privately", parsed.invitation.vaultId);
     vault = await readVault(parsed.invitation.vaultId);
     privateBalance = await ready.balance(STRK);
     if (vault.state !== "3") throw new Error("The transaction succeeded but the vault is not CLAIMED. Do not retry.");

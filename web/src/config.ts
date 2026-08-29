@@ -11,4 +11,4 @@ export const FAST_GRACE_SECONDS = "300";
 export const NORMAL_INACTIVITY_SECONDS = "2592000";
 export const NORMAL_GRACE_SECONDS = "604800";
 export const AUTH_TTL_SECONDS = 600;
-export const READY_VERSION = "5.33.9";
+export const READY_MIN_VERSION = "5.33.9";
