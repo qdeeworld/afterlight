@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RelayPlan } from "../src/core.js";
+import { readActualFeeFri } from "../src/starknet-adapter.js";
 import {
   ExecutorError,
   assessBalanceHealth,
@@ -43,6 +44,12 @@ const policy = {
 } as const;
 
 describe("fail-closed exact-call executor", () => {
+  it("accepts only scalar or explicitly FRI control receipt fees", () => {
+    expect(readActualFeeFri("0x46")).toBe("70");
+    expect(readActualFeeFri({ amount: "0x46", unit: "FRI" })).toBe("70");
+    expect(readActualFeeFri({ amount: "0x46" })).toBeUndefined();
+    expect(readActualFeeFri({ amount: "0x46", unit: "WEI" })).toBeUndefined();
+  });
   it("does nothing when submission is disabled", async () => {
     const adapter = fakeAdapter();
     const budget = freshBudget();
@@ -124,6 +131,57 @@ describe("fail-closed exact-call executor", () => {
     expect(adapter.simulateExact).toHaveBeenCalledTimes(1);
     expect(adapter.signAndSubmitExact).toHaveBeenCalledTimes(1);
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
+  });
+
+  it("safely releases an exact hashless pre-broadcast reservation before retrying", async () => {
+    const adapter = fakeAdapter();
+    const budget = freshBudget();
+    await budget.reserve({
+      budgetClass: "control",
+      dayKey: day,
+      semanticKey: plan.semanticKey,
+      exactFingerprint: plan.fingerprint,
+      maxFeeFri: "110",
+      perCallCapFri: "200",
+      dailyBudgetFri: "1000",
+      nowMs,
+    });
+
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 1)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+    });
+    expect(adapter.signAndSubmitExact).toHaveBeenCalledOnce();
+  });
+
+  it("rebroadcasts and reconciles an exact prepared checkpoint across semantic buckets", async () => {
+    const adapter = fakeAdapter();
+    const budget = freshBudget();
+    await budget.reserve({
+      budgetClass: "control",
+      dayKey: day,
+      semanticKey: plan.semanticKey,
+      exactFingerprint: plan.fingerprint,
+      maxFeeFri: "110",
+      perCallCapFri: "200",
+      dailyBudgetFri: "1000",
+      nowMs,
+    });
+    await budget.markPrepared(plan.semanticKey, plan.fingerprint, "0xabc", "{}", nowMs + 1);
+    const nextBucket = { ...plan, semanticKey: "b".repeat(64) };
+
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 2)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+    });
+    expect(adapter.rebroadcastPreparedExact).toHaveBeenCalledWith(
+      expect.objectContaining({ semanticKey: plan.semanticKey }),
+      "110",
+      "0xabc",
+      "{}",
+    );
+    expect(adapter.simulateExact).not.toHaveBeenCalled();
+    expect(adapter.signAndSubmitExact).not.toHaveBeenCalled();
   });
 
   it("recovers a submitted checkpoint after its time-bucket semantic key changes", async () => {
@@ -278,17 +336,20 @@ function fakeAdapter(overrides: {
 } = {}): StarknetRelayAdapter & {
   simulateExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["simulateExact"]>>;
   signAndSubmitExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["signAndSubmitExact"]>>;
+  rebroadcastPreparedExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["rebroadcastPreparedExact"]>>;
 } {
   return {
     simulateExact: vi.fn(async () => overrides.simulation ?? successfulSimulation()),
-    signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri) =>
-      overrides.submission ?? {
+    signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri, persistPrepared) => {
+      await persistPrepared("0xabc", "{}");
+      return overrides.submission ?? {
         submitted: true,
         transactionHash: "0xabc",
         callFingerprint: plan.fingerprint,
         transactionMaxFeeFri,
-      },
-    ),
+      };
+    }),
+    rebroadcastPreparedExact: vi.fn(async () => {}),
     reconcileReceipt: vi.fn(async () => overrides.receipt ?? successfulReceipt()),
     readRelayerBalance: vi.fn(async () => "1000"),
   };

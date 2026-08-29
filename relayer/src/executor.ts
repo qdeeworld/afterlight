@@ -63,7 +63,14 @@ export interface StarknetRelayAdapter {
     plan: RelayPlan,
     simulation: SuccessfulExactSimulation,
     transactionMaxFeeFri: string,
+    persistPrepared: (expectedTransactionHash: string, preparedPayload: string) => Promise<void>,
   ): Promise<ExactSubmission>;
+  rebroadcastPreparedExact(
+    plan: RelayPlan,
+    transactionMaxFeeFri: string,
+    expectedTransactionHash: string,
+    preparedPayload: string,
+  ): Promise<void>;
   reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt>;
   readRelayerBalance(): Promise<string>;
 }
@@ -176,7 +183,24 @@ export async function executeRelayPlan(
         nowMs,
       );
     }
-    return duplicateResult(prior.state, prior.transactionHash);
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash !== null &&
+      prior.preparedPayload !== null &&
+      prior.exactFingerprint === plan.fingerprint
+    ) {
+      return rebroadcastPreparedControl(plan, prior.maxFeeFri, adapter, budget, prior.transactionHash, prior.preparedPayload, nowMs);
+    }
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash === null &&
+      prior.preparedPayload === null &&
+      prior.exactFingerprint === plan.fingerprint
+    ) {
+      await budget.release(plan.semanticKey, plan.fingerprint, nowMs);
+    } else {
+      return duplicateResult(prior.state, prior.transactionHash);
+    }
   }
   if (prior.sponsorshipFrozen) throw new ExecutorError("sponsorship_frozen");
 
@@ -185,16 +209,32 @@ export async function executeRelayPlan(
   // fingerprint before reserving a new time-bucket semantic key.
   const active = await budget.findActiveByFingerprint?.(plan.fingerprint);
   if (active?.outcome === "found") {
+    const activePlan = Object.freeze({ ...plan, semanticKey: active.semanticKey });
     if (active.state === "submitted" && active.transactionHash !== null) {
       return reconcileSubmitted(
         active.transactionHash,
-        Object.freeze({ ...plan, semanticKey: active.semanticKey }),
+        activePlan,
         adapter,
         budget,
         nowMs,
       );
     }
-    return duplicateResult(active.state, active.transactionHash);
+    if (active.state === "reserved" && active.transactionHash !== null && active.preparedPayload !== null) {
+      return rebroadcastPreparedControl(
+        activePlan,
+        active.maxFeeFri,
+        adapter,
+        budget,
+        active.transactionHash,
+        active.preparedPayload,
+        nowMs,
+      );
+    }
+    if (active.state === "reserved" && active.transactionHash === null && active.preparedPayload === null) {
+      await budget.release(active.semanticKey, plan.fingerprint, nowMs);
+    } else {
+      return duplicateResult(active.state, active.transactionHash);
+    }
   }
 
   // Admission checks that would reject an already-submitted retry belong only
@@ -252,7 +292,23 @@ export async function executeRelayPlan(
 
   let submission: ExactSubmission;
   try {
-    submission = await adapter.signAndSubmitExact(plan, simulation, maxFeeFri);
+    submission = await adapter.signAndSubmitExact(
+      plan,
+      simulation,
+      maxFeeFri,
+      async (expectedTransactionHash, preparedPayload) => {
+        const prepared = await budget.markPrepared(
+          plan.semanticKey,
+          plan.fingerprint,
+          expectedTransactionHash,
+          preparedPayload,
+          nowMs,
+        );
+        if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
+          throw new ExecutorError("submission_not_started");
+        }
+      },
+    );
   } catch {
     // An unexpected transport failure may have occurred after broadcast. Keep
     // the reservation until an operator reconciles the account nonce/receipt.
@@ -287,6 +343,36 @@ export async function executeRelayPlan(
     budget,
     nowMs,
   );
+}
+
+async function rebroadcastPreparedControl(
+  plan: RelayPlan,
+  transactionMaxFeeFri: string,
+  adapter: StarknetRelayAdapter,
+  budget: BudgetCoordinator,
+  expectedTransactionHash: string,
+  preparedPayload: string,
+  nowMs: number,
+): Promise<ExecutionResult> {
+  try {
+    await adapter.rebroadcastPreparedExact(
+      plan,
+      transactionMaxFeeFri,
+      expectedTransactionHash,
+      preparedPayload,
+    );
+  } catch {
+    // The exact stored transaction is idempotent. A duplicate response or a
+    // transport loss may mean either broadcast landed, so the receipt remains
+    // authoritative and the reservation must stay locked.
+  }
+  await budget.markSubmitted(
+    plan.semanticKey,
+    plan.fingerprint,
+    expectedTransactionHash,
+    nowMs,
+  );
+  return reconcileSubmitted(expectedTransactionHash, plan, adapter, budget, nowMs);
 }
 
 async function reconcileSubmitted(

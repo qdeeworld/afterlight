@@ -231,7 +231,16 @@ export async function executePreparedExit(
         prior.preparedPayload,
       );
     }
-    return { status: "duplicate", transactionHash: prior.transactionHash };
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash === null &&
+      prior.preparedPayload === null &&
+      prior.exactFingerprint === validated.bindingSha256
+    ) {
+      await budget.release(semanticKey, validated.bindingSha256, Date.now());
+    } else {
+      return { status: "duplicate", transactionHash: prior.transactionHash };
+    }
   }
   // The kill switch blocks every fresh signature and broadcast, but cannot
   // strand a transaction already recorded as SUBMITTED. Receipt-only
@@ -348,13 +357,16 @@ export async function executePreparedExit(
     const expectedHash = assertOuterSignatureMatchesHash(signed);
     const preparedPayload = serializeSignedExitForStorage(signed);
     submissionStage = "persist_expected_hash";
-    await budget.markPrepared(
+    const prepared = await budget.markPrepared(
       semanticKey,
       validated.bindingSha256,
       expectedHash,
       preparedPayload,
       Date.now(),
     );
+    if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
+      throw new ExitExecutorError("exit_unavailable");
+    }
     submissionStage = "broadcast";
     broadcastStarted = true;
     let response;

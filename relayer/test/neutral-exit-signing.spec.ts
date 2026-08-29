@@ -187,6 +187,30 @@ describe("neutral exact-exit signing boundary", () => {
     expect(afterAuthenticated).not.toHaveBeenCalled();
   });
 
+  it("releases an exact hashless pre-broadcast exit reservation before the kill switch", async () => {
+    const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
+    const budget = {
+      lookup: vi.fn().mockResolvedValue({
+        outcome: "found",
+        state: "reserved",
+        exactFingerprint: validated.bindingSha256,
+        transactionHash: null,
+        preparedPayload: null,
+      }),
+      release: vi.fn().mockResolvedValue({ outcome: "released" }),
+    } as any;
+    await expect(executePreparedExit("{}", {
+      SUBMIT_ENABLED: "false",
+      EXIT_RPC_URL: "https://rpc.invalid",
+      STARKNET_RPC_AUTH_TOKEN: "configured",
+    } as any, budget, validated)).rejects.toMatchObject({ code: "exit_unavailable" });
+    expect(budget.release).toHaveBeenCalledWith(
+      validated.bindingSha256,
+      validated.bindingSha256,
+      expect.any(Number),
+    );
+  });
+
   it("validates before the kill switch and never signs a fresh disabled exit", async () => {
     await expect(executePreparedExit("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "invalid_exit" });
   });

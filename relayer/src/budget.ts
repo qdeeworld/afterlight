@@ -73,6 +73,8 @@ export type ActiveBudgetLookupResult = Readonly<
       semanticKey: string;
       state: "reserved" | "submitted";
       transactionHash: string | null;
+      preparedPayload: string | null;
+      maxFeeFri: string;
     }
 >;
 
@@ -255,6 +257,8 @@ export class RelayBudget extends DurableObject<Env> {
       semanticKey: row.semantic_key,
       state: row.status === "SUBMITTED" ? "submitted" : "reserved",
       transactionHash: row.transaction_hash,
+      preparedPayload: row.prepared_payload,
+      maxFeeFri: row.max_fee_fri,
     };
   }
 
