@@ -57,6 +57,7 @@ const POOL = EXIT_POLICY.poolAddress;
 const TOKEN = EXIT_POLICY.tokenAddress;
 const AFTERLIGHT = EXIT_POLICY.afterlightAddress;
 const NEUTRAL = EXIT_POLICY.neutralAddress;
+const FUNDING_CHECKPOINT_MAX_AGE_SECONDS = 300n;
 
 export class ExitExecutorError extends Error {
   constructor(readonly code: "invalid_exit" | "exit_unavailable" | "exit_busy" | "exit_uncertain" | "exit_reverted") {
@@ -78,7 +79,7 @@ export type ClaimCapacity = Readonly<{
   fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
 }>;
 
-export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot">): Promise<ClaimCapacity> {
+export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot" | "fundingAdmissionSnapshot" | "consumeFundingAdmission">): Promise<ClaimCapacity> {
   try {
     const provider = new RpcProvider({
       nodeUrl: env.EXIT_RPC_URL,
@@ -90,7 +91,7 @@ export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinato
     const block = latest.block_number;
     const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) =>
       provider.callContract({ contractAddress, entrypoint, calldata }, block);
-    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw] = await Promise.all([
+    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw, configRaw] = await Promise.all([
       provider.getClassHashAt(POOL, block),
       provider.getClassHashAt(NEUTRAL, block),
       provider.getClassHashAt(AFTERLIGHT, block),
@@ -99,12 +100,15 @@ export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinato
       call(AFTERLIGHT, "get_locked_by_token", [TOKEN]),
       call(POOL, "get_fee_amount"),
       call(POOL, "get_fee_collector"),
+      call(AFTERLIGHT, "get_config"),
     ]);
     if (
       normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH) ||
       normalizeHex(neutralClass) !== normalizeHex(EXIT_POLICY.neutralClassHash) ||
       normalizeHex(afterlightClass) !== normalizeHex(EXIT_POLICY.afterlightClassHash) ||
-      normalizeHex(collectorRaw[0] ?? "0x0") !== normalizeHex(EXIT_POLICY.poolFeeCollector)
+      normalizeHex(collectorRaw[0] ?? "0x0") !== normalizeHex(EXIT_POLICY.poolFeeCollector) ||
+      configRaw.length !== 10 ||
+      BigInt(configRaw[9] ?? -1) !== FUNDING_CHECKPOINT_MAX_AGE_SECONDS
     ) return unknownCapacity();
     const fee = BigInt(feeRaw[0] ?? -1);
     if (fee !== BigInt(EXIT_POLICY.poolFeeEachFri)) return unknownCapacity();
@@ -114,20 +118,28 @@ export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinato
     const required = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri) + BigInt(EXIT_POLICY.postSpendHealthFloorFri);
     if (balance < required) return exhaustedCapacity("balance");
     const liability = parseU256Result(liabilityRaw, "liability");
+    if (liability !== 0n && budget !== undefined) {
+      // A nonzero exact contract liability is authoritative evidence that the
+      // admitted FUND consumed the one-shot checkpoint. Clear the operational
+      // lease; funding remains exhausted by the liability itself.
+      await budget.consumeFundingAdmission(Date.now());
+    }
     const chainCapacity: ClaimCapacity = liability === 0n
       ? { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" }
       : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
     if (budget === undefined) return chainCapacity;
     const dayKey = new Date().toISOString().slice(0, 10);
-    const [exitLedger, activeLedger] = await Promise.all([
+    const [exitLedger, activeLedger, fundingAdmission] = await Promise.all([
       budget.snapshot(dayKey, "exit"),
       budget.activeSnapshot(),
+      budget.fundingAdmissionSnapshot(Date.now()),
     ]);
     return applyLedgerCapacity(chainCapacity, {
       ...exitLedger,
       reservedCount: activeLedger.reservedCount,
       submittedCount: activeLedger.submittedCount,
       sponsorshipFrozen: activeLedger.sponsorshipFrozen,
+      fundingAdmissionActive: fundingAdmission.active,
     });
   } catch {
     return unknownCapacity();
@@ -142,6 +154,7 @@ export function applyLedgerCapacity(
     reservedCount: number;
     submittedCount: number;
     sponsorshipFrozen: boolean;
+    fundingAdmissionActive?: boolean;
   }>,
 ): ClaimCapacity {
   if (chainCapacity.status !== "ready") return chainCapacity;
@@ -149,6 +162,9 @@ export function applyLedgerCapacity(
   const projected = BigInt(snapshot.reservedTodayFri) + BigInt(snapshot.spentTodayFri) + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
   if (snapshot.sponsorshipFrozen || active || projected > BigInt(EXIT_POLICY.maxNetworkFeePerExitFri)) {
     return { status: "exhausted", reason: "ledger", fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+  }
+  if (snapshot.fundingAdmissionActive) {
+    return { ...chainCapacity, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
   }
   return chainCapacity;
 }
@@ -194,11 +210,26 @@ export async function executePreparedExit(
   const prior = await budget.lookup(semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     if (
-      (prior.state === "reserved" || prior.state === "submitted") &&
+      prior.state === "submitted" &&
       prior.transactionHash !== null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
       return reconcileSubmittedExit(provider, budget, validated, prior.transactionHash);
+    }
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash !== null &&
+      prior.preparedPayload !== null &&
+      prior.exactFingerprint === validated.bindingSha256
+    ) {
+      if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
+      return rebroadcastPreparedExit(
+        provider,
+        budget,
+        validated,
+        prior.transactionHash,
+        prior.preparedPayload,
+      );
     }
     return { status: "duplicate", transactionHash: prior.transactionHash };
   }
@@ -315,11 +346,13 @@ export async function executePreparedExit(
     });
     submissionStage = "outer_hash";
     const expectedHash = assertOuterSignatureMatchesHash(signed);
+    const preparedPayload = serializeSignedExitForStorage(signed);
     submissionStage = "persist_expected_hash";
     await budget.markPrepared(
       semanticKey,
       validated.bindingSha256,
       expectedHash,
+      preparedPayload,
       Date.now(),
     );
     submissionStage = "broadcast";
@@ -362,6 +395,90 @@ export async function executePreparedExit(
     console.error(JSON.stringify({ event: "exit_submission_failed", stage: submissionStage }));
     throw broadcastStarted ? new ExitExecutorError("exit_uncertain") : new ExitExecutorError("exit_unavailable");
   }
+}
+
+async function rebroadcastPreparedExit(
+  provider: RpcProvider,
+  budget: BudgetCoordinator,
+  validated: ValidatedExit,
+  expectedHash: string,
+  preparedPayload: string,
+): Promise<ExitResult> {
+  const signed = parseStoredSignedExit(preparedPayload);
+  try {
+    validateStoredSignedExit(signed, validated, expectedHash);
+  } catch {
+    throw new ExitExecutorError("exit_uncertain");
+  }
+  try {
+    const response = await provider.invokeSignedTx(signed as Parameters<RpcProvider["invokeSignedTx"]>[0]);
+    if (normalizeHex(response.transaction_hash) !== normalizeHex(expectedHash)) {
+      throw new ExitExecutorError("exit_uncertain");
+    }
+    await budget.markSubmitted(
+      validated.bindingSha256,
+      validated.bindingSha256,
+      expectedHash,
+      Date.now(),
+    );
+  } catch (error) {
+    // Replaying the exact persisted transaction is idempotent. A duplicate,
+    // validation response, or transport loss may all mean the first broadcast
+    // landed, so receipt reconciliation remains authoritative and the durable
+    // reservation is never released here.
+    console.error(JSON.stringify({
+      event: "exit_prepared_rebroadcast_not_acknowledged",
+      category: classifyBroadcastFailure(error).category,
+    }));
+  }
+  return reconcileSubmittedExit(provider, budget, validated, expectedHash);
+}
+
+type StoredSignedExit = Record<string, unknown>;
+
+export function serializeSignedExitForStorage(signed: unknown): string {
+  const serialized = JSON.stringify(signed, (_key, value) =>
+    typeof value === "bigint" ? value.toString() : value,
+  );
+  if (serialized.length < 2 || serialized.length > 3_000_000) {
+    throw new ExitExecutorError("exit_unavailable");
+  }
+  return serialized;
+}
+
+function parseStoredSignedExit(serialized: string): StoredSignedExit {
+  try {
+    const parsed: unknown = JSON.parse(serialized);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("shape");
+    return parsed as StoredSignedExit;
+  } catch {
+    throw new ExitExecutorError("exit_uncertain");
+  }
+}
+
+export function validateStoredSignedExit(
+  signed: StoredSignedExit,
+  validated: ValidatedExit,
+  expectedHash: string,
+  publicKey: string = EXIT_POLICY.neutralPublicKey,
+): true {
+  const bounds = parseResourceBounds(signed.resource_bounds);
+  assertSignedExitTransaction(signed, {
+    nonce: BigInt(String(signed.nonce)),
+    executeCalldata: transaction.getExecuteCalldata([{
+      contractAddress: validated.call.contractAddress,
+      entrypoint: validated.call.entrypoint,
+      calldata: validated.call.calldata.map(hex),
+    }], "1"),
+    proof: validated.proof.data,
+    proofFacts: validated.proof.facts.facts.map(hex),
+    resourceBounds: bounds,
+    networkCapFri: BigInt(EXIT_POLICY.maxNetworkFeePerExitFri),
+  });
+  if (normalizeHex(assertOuterSignatureMatchesHash(signed, publicKey)) !== normalizeHex(expectedHash)) {
+    throw new Error("stored_hash_mismatch");
+  }
+  return true;
 }
 
 export async function reconcileSubmittedExit(

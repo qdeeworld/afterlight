@@ -59,6 +59,7 @@ export type BudgetLookupResult = Readonly<
       dayKey: string;
       exactFingerprint: string;
       transactionHash: string | null;
+      preparedPayload: string | null;
       maxFeeFri: string;
       actualFeeFri: string | null;
       sponsorshipFrozen: boolean;
@@ -93,6 +94,12 @@ export type ActiveBudgetSnapshot = Readonly<{
   sponsorshipFrozen: boolean;
 }>;
 
+export type FundingAdmissionResult = Readonly<{
+  acquired: boolean;
+  active: boolean;
+  expiresAtMs: number | null;
+}>;
+
 export class BudgetError extends Error {
   readonly code:
     | "invalid_budget_input"
@@ -122,6 +129,7 @@ type ReservationRow = Readonly<{
   actual_fee_fri: string | null;
   status: "RESERVED" | "SUBMITTED" | "RELEASED" | "COMMITTED" | "REVERTED" | "BREACHED";
   transaction_hash: string | null;
+  prepared_payload: string | null;
 }>;
 
 type TotalsRow = Readonly<{
@@ -173,6 +181,13 @@ export class RelayBudget extends DurableObject<Env> {
         spent_fri TEXT NOT NULL,
         PRIMARY KEY (budget_class, day_key)
       );
+
+      CREATE TABLE IF NOT EXISTS funding_admission (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        expires_at_ms INTEGER
+      );
+      INSERT OR IGNORE INTO funding_admission (singleton, expires_at_ms)
+      VALUES (1, NULL);
     `);
     const reservationColumns = this.ctx.storage.sql
       .exec<{ name: string }>("PRAGMA table_info(reservations)")
@@ -180,6 +195,11 @@ export class RelayBudget extends DurableObject<Env> {
     if (!reservationColumns.some(({ name }) => name === "budget_class")) {
       this.ctx.storage.sql.exec(
         "ALTER TABLE reservations ADD COLUMN budget_class TEXT NOT NULL DEFAULT 'control' CHECK (budget_class IN ('control', 'exit'))",
+      );
+    }
+    if (!reservationColumns.some(({ name }) => name === "prepared_payload")) {
+      this.ctx.storage.sql.exec(
+        "ALTER TABLE reservations ADD COLUMN prepared_payload TEXT",
       );
     }
     // The legacy ledger did not identify whether a reservation paid for a
@@ -209,6 +229,7 @@ export class RelayBudget extends DurableObject<Env> {
       dayKey: row.day_key,
       exactFingerprint: row.exact_fingerprint,
       transactionHash: row.transaction_hash,
+      preparedPayload: row.prepared_payload,
       maxFeeFri: row.max_fee_fri,
       actualFeeFri: row.actual_fee_fri,
       sponsorshipFrozen: frozen,
@@ -220,7 +241,7 @@ export class RelayBudget extends DurableObject<Env> {
     const rows = this.ctx.storage.sql
       .exec<ReservationRow>(
         `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-                status, transaction_hash
+                status, transaction_hash, prepared_payload
          FROM reservations
          WHERE exact_fingerprint = ? AND status IN ('RESERVED', 'SUBMITTED')`,
         exact,
@@ -268,8 +289,8 @@ export class RelayBudget extends DurableObject<Env> {
         this.ctx.storage.sql.exec(
           `INSERT INTO reservations
              (semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-              status, transaction_hash, updated_at_ms)
-           VALUES (?, ?, ?, ?, ?, NULL, 'RESERVED', NULL, ?)`,
+              status, transaction_hash, prepared_payload, updated_at_ms)
+           VALUES (?, ?, ?, ?, ?, NULL, 'RESERVED', NULL, NULL, ?)`,
           normalized.semanticKey,
           normalized.budgetClass,
           normalized.exactFingerprint,
@@ -281,7 +302,7 @@ export class RelayBudget extends DurableObject<Env> {
         this.ctx.storage.sql.exec(
           `UPDATE reservations
            SET budget_class = ?, exact_fingerprint = ?, day_key = ?, max_fee_fri = ?, actual_fee_fri = NULL,
-               status = 'RESERVED', transaction_hash = NULL, updated_at_ms = ?
+               status = 'RESERVED', transaction_hash = NULL, prepared_payload = NULL, updated_at_ms = ?
            WHERE semantic_key = ?`,
           normalized.budgetClass,
           normalized.exactFingerprint,
@@ -340,17 +361,19 @@ export class RelayBudget extends DurableObject<Env> {
     semanticKey: string,
     exactFingerprint: string,
     expectedTransactionHash: string,
+    preparedPayload: string,
     nowMs: number,
   ): BudgetMutationResult {
     const semantic = validKey(semanticKey);
     const exact = validKey(exactFingerprint);
     const hash = validTransactionHash(expectedTransactionHash);
+    const payload = validPreparedPayload(preparedPayload);
     const timestamp = validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
       const row = this.requiredReservation(semantic);
       const totals = this.readTotals(row.budget_class, row.day_key);
       if (row.exact_fingerprint !== exact) throw new BudgetError("exact_fingerprint_mismatch");
-      if (row.status === "RESERVED" && row.transaction_hash === hash) {
+      if (row.status === "RESERVED" && row.transaction_hash === hash && row.prepared_payload === payload) {
         return mutationResult("already_prepared", totals, this.isFrozen());
       }
       if (row.status !== "RESERVED" || row.transaction_hash !== null) {
@@ -358,9 +381,10 @@ export class RelayBudget extends DurableObject<Env> {
       }
       this.ctx.storage.sql.exec(
         `UPDATE reservations
-         SET transaction_hash = ?, updated_at_ms = ?
+         SET transaction_hash = ?, prepared_payload = ?, updated_at_ms = ?
          WHERE semantic_key = ?`,
         hash,
+        payload,
         timestamp,
         semantic,
       );
@@ -383,7 +407,7 @@ export class RelayBudget extends DurableObject<Env> {
 
       const next = removeReservation(totals, row.max_fee_fri);
       this.ctx.storage.sql.exec(
-        "UPDATE reservations SET status = 'RELEASED', updated_at_ms = ? WHERE semantic_key = ?",
+        "UPDATE reservations SET status = 'RELEASED', transaction_hash = NULL, prepared_payload = NULL, updated_at_ms = ? WHERE semantic_key = ?",
         timestamp,
         semantic,
       );
@@ -439,7 +463,7 @@ export class RelayBudget extends DurableObject<Env> {
       const terminalStatus = breached ? "BREACHED" : execution === "reverted" ? "REVERTED" : "COMMITTED";
       this.ctx.storage.sql.exec(
         `UPDATE reservations
-         SET actual_fee_fri = ?, status = ?, updated_at_ms = ?
+         SET actual_fee_fri = ?, status = ?, prepared_payload = NULL, updated_at_ms = ?
          WHERE semantic_key = ?`,
         actualFee.toString(),
         terminalStatus,
@@ -502,6 +526,51 @@ export class RelayBudget extends DurableObject<Env> {
     };
   }
 
+  acquireFundingAdmission(nowMs: number, ttlMs: number): FundingAdmissionResult {
+    const now = validTimestamp(nowMs);
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 15 * 60_000) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.fundingAdmissionExpiry();
+      if (current !== null && current > now) {
+        return { acquired: false, active: true, expiresAtMs: current };
+      }
+      const expiresAtMs = now + ttlMs;
+      this.ctx.storage.sql.exec(
+        "UPDATE funding_admission SET expires_at_ms = ? WHERE singleton = 1",
+        expiresAtMs,
+      );
+      return { acquired: true, active: true, expiresAtMs };
+    });
+  }
+
+  fundingAdmissionSnapshot(nowMs: number): FundingAdmissionResult {
+    const now = validTimestamp(nowMs);
+    const expiresAtMs = this.fundingAdmissionExpiry();
+    const active = expiresAtMs !== null && expiresAtMs > now;
+    return { acquired: false, active, expiresAtMs: active ? expiresAtMs : null };
+  }
+
+  consumeFundingAdmission(nowMs: number): FundingAdmissionResult {
+    validTimestamp(nowMs);
+    return this.ctx.storage.transactionSync(() => {
+      const current = this.fundingAdmissionExpiry();
+      this.ctx.storage.sql.exec(
+        "UPDATE funding_admission SET expires_at_ms = NULL WHERE singleton = 1",
+      );
+      return { acquired: false, active: false, expiresAtMs: current };
+    });
+  }
+
+  private fundingAdmissionExpiry(): number | null {
+    return this.ctx.storage.sql
+      .exec<{ expires_at_ms: number | null }>(
+        "SELECT expires_at_ms FROM funding_admission WHERE singleton = 1",
+      )
+      .one().expires_at_ms;
+  }
+
   private readTotals(budgetClass: "control" | "exit", dayKey: string): TotalsRow {
     return this.ctx.storage.sql
       .exec<TotalsRow>(
@@ -529,7 +598,7 @@ export class RelayBudget extends DurableObject<Env> {
     return this.ctx.storage.sql
       .exec<ReservationRow>(
         `SELECT semantic_key, budget_class, exact_fingerprint, day_key, max_fee_fri, actual_fee_fri,
-                status, transaction_hash
+                status, transaction_hash, prepared_payload
          FROM reservations WHERE semantic_key = ?`,
         semanticKey,
       )
@@ -615,6 +684,21 @@ function validKey(value: string): string {
 
 function validTransactionHash(value: string): string {
   if (!/^0x[0-9a-f]{1,64}$/.test(value)) throw new BudgetError("invalid_budget_input");
+  return value;
+}
+
+function validPreparedPayload(value: string): string {
+  if (typeof value !== "string" || value.length < 2 || value.length > 3_000_000) {
+    throw new BudgetError("invalid_budget_input");
+  }
+  try {
+    const decoded = JSON.parse(value);
+    if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+      throw new Error("invalid");
+    }
+  } catch {
+    throw new BudgetError("invalid_budget_input");
+  }
   return value;
 }
 

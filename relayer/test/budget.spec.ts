@@ -62,11 +62,13 @@ describe("deployment-wide sponsorship coordinator", () => {
   it("persists a recoverable expected hash before broadcast and releases a definitive reject", async () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput());
-    expect((await budget.markPrepared(semantic, exact, "0xabc", 2)).outcome).toBe("prepared");
-    expect((await budget.markPrepared(semantic, exact, "0xabc", 3)).outcome).toBe("already_prepared");
+    const prepared = JSON.stringify({ signed: "exact-artifact" });
+    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, 2)).outcome).toBe("prepared");
+    expect((await budget.markPrepared(semantic, exact, "0xabc", prepared, 3)).outcome).toBe("already_prepared");
     expect(await budget.lookup(semantic)).toMatchObject({
       state: "reserved",
       transactionHash: "0xabc",
+      preparedPayload: prepared,
     });
     await runInDurableObject(budget, async (instance: RelayBudget) => {
       expect(() => instance.markSubmitted(semantic, exact, "0xdef", 4)).toThrowError(
@@ -75,6 +77,28 @@ describe("deployment-wide sponsorship coordinator", () => {
     });
     expect((await budget.release(semantic, exact, 5)).outcome).toBe("released");
     expect(await budget.snapshot(dayOne)).toMatchObject({ reservedTodayFri: "0" });
+  });
+
+  it("atomically grants only one live funding admission until its lease expires", async () => {
+    const budget = freshBudget();
+    expect(await budget.fundingAdmissionSnapshot(1_000)).toEqual({
+      acquired: false,
+      active: false,
+      expiresAtMs: null,
+    });
+    const contenders = await Promise.all([
+      budget.acquireFundingAdmission(1_000, 600_000),
+      budget.acquireFundingAdmission(1_000, 600_000),
+    ]);
+    expect(contenders.filter(({ acquired }) => acquired)).toHaveLength(1);
+    expect(contenders.every(({ active, expiresAtMs }) => active && expiresAtMs === 601_000)).toBe(true);
+    expect((await budget.acquireFundingAdmission(601_000, 600_000)).acquired).toBe(true);
+    expect(await budget.consumeFundingAdmission(601_001)).toEqual({
+      acquired: false,
+      active: false,
+      expiresAtMs: 1_201_000,
+    });
+    expect((await budget.fundingAdmissionSnapshot(601_002)).active).toBe(false);
   });
 
   it("enforces per-call and daily exposure inside the atomic reservation", async () => {

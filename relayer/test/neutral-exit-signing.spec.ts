@@ -16,7 +16,7 @@ import {
   validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit } from "../src/exit-executor.js";
+import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit, serializeSignedExitForStorage, validateStoredSignedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
@@ -97,6 +97,12 @@ describe("neutral exact-exit signing boundary", () => {
         fundingStatus: "exhausted",
       });
     }
+    expect(applyLedgerCapacity(ready, { ...base, fundingAdmissionActive: true })).toEqual({
+      status: "ready",
+      reason: "ready",
+      fundingStatus: "exhausted",
+      fundingReason: "exit_capacity",
+    });
   });
 
   it("reconciles an already-submitted private exit instead of leaving the nonce lane blocked", async () => {
@@ -204,6 +210,51 @@ describe("neutral exact-exit signing boundary", () => {
 
     const publicKey = ec.starkCurve.getStarkKey(TEST_SIGNER);
     expect(assertOuterSignatureMatchesHash(signed, publicKey)).toMatch(/^0x[0-9a-f]+$/);
+  });
+
+  it("persists and revalidates the exact signed exit artifact required for safe rebroadcast", async () => {
+    const provider = new RpcProvider({ nodeUrl: "http://127.0.0.1:1", plugins: false });
+    vi.spyOn(provider, "getChainId").mockResolvedValue(MAINNET_CHAIN_ID);
+    const account = new Account({
+      provider,
+      address: LOCKED_NEUTRAL_ADDRESS,
+      signer: TEST_SIGNER,
+      cairoVersion: "1",
+      transactionVersion: "0x3",
+      plugins: false,
+    });
+    const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
+    const call: Call = {
+      contractAddress: validated.call.contractAddress,
+      entrypoint: validated.call.entrypoint,
+      calldata: validated.call.calldata.map((value) => `0x${BigInt(value).toString(16)}`),
+    };
+    const proofFacts = validated.proof.facts.facts.map((value) => `0x${BigInt(value).toString(16)}`);
+    const resourceBounds = {
+      l1_gas: { max_amount: 2n, max_price_per_unit: 3n },
+      l1_data_gas: { max_amount: 5n, max_price_per_unit: 7n },
+      l2_gas: { max_amount: 11n, max_price_per_unit: 13n },
+    };
+    const signed = await account.getSignedTransaction(call, {
+      nonce: 7n,
+      resourceBounds,
+      tip: 0,
+      paymasterData: [],
+      accountDeploymentData: [],
+      nonceDataAvailabilityMode: "L1",
+      feeDataAvailabilityMode: "L1",
+      proof: validated.proof.data,
+      proofFacts,
+    });
+    const publicKey = ec.starkCurve.getStarkKey(TEST_SIGNER);
+    const expectedHash = assertOuterSignatureMatchesHash(signed, publicKey);
+    const serialized = serializeSignedExitForStorage(signed);
+    const restored = JSON.parse(serialized) as Record<string, unknown>;
+    expect(validateStoredSignedExit(restored, validated, expectedHash, publicKey)).toBe(true);
+
+    const tampered = structuredClone(restored);
+    (tampered.calldata as string[])[0] = "0x999";
+    expect(() => validateStoredSignedExit(tampered, validated, expectedHash, publicKey)).toThrow();
   });
 });
 

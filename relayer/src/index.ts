@@ -84,6 +84,13 @@ export default {
           beforeFreshExecution = async () => {
             const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
             requireFundingAdmission(await readClaimCapacity(env, budget));
+            const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
+            if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+            const admission = await budget.acquireFundingAdmission(
+              Date.now(),
+              Number(ttlMs),
+            );
+            if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
           };
         }
       } else {

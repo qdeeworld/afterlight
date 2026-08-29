@@ -1,6 +1,7 @@
 import type {
   ActiveBudgetLookupResult,
   ActiveBudgetSnapshot,
+  FundingAdmissionResult,
   BudgetMutationResult,
   BudgetReserveInput,
   BudgetReserveResult,
@@ -81,6 +82,7 @@ export interface BudgetCoordinator {
     semanticKey: string,
     exactFingerprint: string,
     expectedTransactionHash: string,
+    preparedPayload: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
   release(
@@ -98,6 +100,9 @@ export interface BudgetCoordinator {
   ): Promise<BudgetMutationResult>;
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
   activeSnapshot(): Promise<ActiveBudgetSnapshot>;
+  acquireFundingAdmission(nowMs: number, ttlMs: number): Promise<FundingAdmissionResult>;
+  fundingAdmissionSnapshot(nowMs: number): Promise<FundingAdmissionResult>;
+  consumeFundingAdmission(nowMs: number): Promise<FundingAdmissionResult>;
 }
 
 export type ExecutorPolicy = Readonly<{

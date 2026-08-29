@@ -77,6 +77,8 @@ async function checkpoint(): Promise<string> {
   const startedBlock = await provider.getBlockNumber();
   const startedAt = Math.floor(Date.now() / 1_000);
   let returnedHash: string | undefined;
+  let responseLost = false;
+  let responseReceived = false;
   try {
     const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
       method: "POST",
@@ -85,13 +87,23 @@ async function checkpoint(): Promise<string> {
       credentials: "omit",
       referrerPolicy: "no-referrer",
     });
+    responseReceived = true;
     const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
     if (response.ok && body.status === "relayed" && body.result?.transactionHash && ["accepted", "duplicate"].includes(String(body.result.status))) {
       returnedHash = num.toHex(BigInt(body.result.transactionHash));
+    } else {
+      throw new Error("The neutral funding checkpoint was rejected. No private funds moved.");
     }
-  } catch {
+  } catch (error) {
+    if (responseReceived) {
+      throw new Error("The neutral funding checkpoint was rejected. No private funds moved.", { cause: error });
+    }
+    responseLost = true;
     // A Worker response may be lost after its single broadcast. Reconcile the
     // public, payload-free checkpoint event before declaring the attempt dead.
+  }
+  if (!returnedHash && !responseLost) {
+    throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
   }
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const result = await provider.getEvents({
