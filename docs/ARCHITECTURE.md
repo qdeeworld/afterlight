@@ -82,4 +82,4 @@ recovery of tokens sent directly to the helper.
 
 ## Current release boundary
 
-The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two vaults completed the cancellation and recovery branches, and all four STRK20 receipts are listed in `strk20.json`. A fresh Ready X read reconciled the successor's shielded balance from `6 STRK` to `7 STRK`, so the mechanism is E2. The public UI and neutral claim route are deployed candidates; E3 requires one fresh end-to-end completion through that interface.
+The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two spike vaults completed the cancellation and recovery branches, and a fresh public Recovery Drill completed the owner and successor journey through the canonical app. All five qualifying STRK20 receipts are listed in `strk20.json`. The E3 claim moved the public vault to `CLAIMED`, reduced liability and allowance to zero, consumed the successor nonce, and increased the successor's Ready X shielded balance from `7 STRK` to `8 STRK`.
