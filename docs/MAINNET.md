@@ -2,8 +2,9 @@
 
 ## Current evidence level
 
-Afterlight has a complete deployed Mainnet product and five validator-qualified
-STRK20 receipts. It is classified **E3 public completion**. A fresh Recovery
+Afterlight has a deployed public Mainnet Recovery Drill and five
+validator-qualified STRK20 receipts. It is classified **E3 public completion**.
+A fresh Recovery
 Drill completed through the canonical app, and an approved Ready X
 `wallet_strk20Balances` read showed the successor increase from `7 STRK` to
 `8 STRK` after its exact-note claim. Prepared, simulated, reverted, and
@@ -52,19 +53,28 @@ contract. Plain Shield transactions and failed attempts do not fill these slots.
 | `CANCEL_REFUND` Vault A | [`0x69e234…c0fb`](https://starkscan.co/tx/0x69e2345ae8816986a709de84f0dcb571b5d092400d6c53bf90197480102c0fb) | PASS |
 | `FUND` Vault B | [`0x036e00…0682a`](https://starkscan.co/tx/0x036e003396fe360ae7fe4766646f493c0eb579d82509652559d40e460770682a) | PASS |
 | `CLAIM` Vault B | [`0x11c990…c8098`](https://starkscan.co/tx/0x11c990aea864e755630d41fd1292620c313b3f64407fc0b3a902544c67c8098) | PASS |
-| Public E3 `CLAIM` | [`0x722033…f5c1b6`](https://voyager.online/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6) | PASS |
+| Public E3 `CLAIM` | [`0x722033…f5c1b6`](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6) | PASS |
 
 The official hub validator's exact success, pool-touch, and declared-contract
-ownership checks pass for all five. Vault A is `CANCELLED`, Vault B is
-`CLAIMED`, total locked liability is zero, and the neutral pool allowance is
-zero. Exact-note settlement is proven onchain. The wallet's post-finality
+ownership checks pass for all five. At the terminal E2 checkpoint, Vault A was
+`CANCELLED`, Vault B was `CLAIMED`, total locked liability was zero, and the
+neutral pool allowance was zero. Exact-note settlement is proven onchain. The
+wallet's post-finality
 reconciliation is `6 STRK -> 7 STRK`: the exact `+1 STRK` recovery output was
 added to the beneficiary while the neutral sponsor paid the separate `6 STRK`
 pool fee. The public E3 vault is also `CLAIMED`; its immediate Ready X
 reconciliation is `7 STRK -> 8 STRK`. Final video production remains pending.
 
 The public E3 lifecycle was founder-operated. An unrelated owner-successor E4
-completion is not claimed.
+completion is not claimed. After that lifecycle, the neutral sponsor allowance
+was deliberately restored to exactly `12 STRK`: enough for one bounded private
+exit under the supported UI policy. A successful claim or cancellation consumes
+`6 STRK` of that allowance and exhausts the route until a later, reviewed
+replenishment. Funding also fails closed whenever a liability, reservation,
+funding lease, daily-exit limit, sponsor-balance floor, or exact allowance check
+is not ready. This is a capacity-limited public drill, not an unattended or
+permissionless liveness guarantee; the relayer cannot forge or redirect a valid
+settlement, but it can delay one by censoring or going offline.
 
 Historical identifiers such as the `spike-inline-56` compiler profile and the
 relayer's `phase-a` hostname are pinned release identifiers. They do not mean

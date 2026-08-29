@@ -8,18 +8,13 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 [![CI](https://github.com/dolepee/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/dolepee/afterlight/actions/workflows/ci.yml)
 
-| Rubric | Present evidence |
-|---|---|
-| STRK20 integration depth | Private funding, cancellation/refund, and exact-note recovery through the canonical pool and custom Afterlight helper |
-| Working Mainnet product | Public Ready X app, deployed contract, five qualifying receipts, and a founder-operated E3 lifecycle |
-| Innovation | Authenticated inactivity, heartbeat, veto, designated-successor authorization, and one exact private destination |
-| Open source | Reproducible artifacts, CI, read-only Mainnet verifier, threat model, operations guide, and MIT license |
-
 ## Current status
 
-**Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://voyager.online/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
+**Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
 
-**Release status: deployed public Mainnet product.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
+**Release status: deployed public Mainnet Recovery Drill.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
+
+The public drill is founder-operated E3 evidence; an unrelated owner-successor E4 completion is not claimed. Its neutral sponsorship is deliberately capacity-limited: the supported route admits one fully backed vault and one private exit at a time, and closes funding whenever allowance, balance, liability, reservation, lease, or UTC-day exit capacity is unavailable. The relayer is correctness-untrusted but liveness-critical—it cannot forge or redirect a valid recovery, but it can delay sponsored controls or settlement by refusing or failing to relay them.
 
 ## Recovery flow
 
