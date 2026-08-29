@@ -177,7 +177,7 @@ footer a { min-height: 44px; display: inline-flex; align-items: center; color: v
   .promise { grid-template-columns: 26px repeat(3, 1fr); padding: 20px 0 0; border-top: 1px solid var(--line-strong); border-left: 0; }
   .promise p { padding-right: 10px; }
   .content-grid { grid-template-columns: 1fr; }
-  .status-panel { position: static; order: -1; }
+  .status-panel { position: static; }
 }
 
 @media (max-width: 620px) {
