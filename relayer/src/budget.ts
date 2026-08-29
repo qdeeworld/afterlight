@@ -192,10 +192,11 @@ export class RelayBudget extends DurableObject<Env> {
 
       CREATE TABLE IF NOT EXISTS funding_admission (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-        expires_at_ms INTEGER
+        expires_at_ms INTEGER,
+        owner_token TEXT
       );
-      INSERT OR IGNORE INTO funding_admission (singleton, expires_at_ms)
-      VALUES (1, NULL);
+      INSERT OR IGNORE INTO funding_admission (singleton, expires_at_ms, owner_token)
+      VALUES (1, NULL, NULL);
     `);
     const reservationColumns = this.ctx.storage.sql
       .exec<{ name: string }>("PRAGMA table_info(reservations)")
@@ -212,6 +213,12 @@ export class RelayBudget extends DurableObject<Env> {
     }
     if (!reservationColumns.some(({ name }) => name === "owner_token")) {
       this.ctx.storage.sql.exec("ALTER TABLE reservations ADD COLUMN owner_token TEXT");
+    }
+    const fundingColumns = this.ctx.storage.sql
+      .exec<{ name: string }>("PRAGMA table_info(funding_admission)")
+      .toArray();
+    if (!fundingColumns.some(({ name }) => name === "owner_token")) {
+      this.ctx.storage.sql.exec("ALTER TABLE funding_admission ADD COLUMN owner_token TEXT");
     }
     // The legacy ledger did not identify whether a reservation paid for a
     // control or exit transaction. Preserve its aggregate against both class
@@ -581,20 +588,25 @@ export class RelayBudget extends DurableObject<Env> {
     };
   }
 
-  acquireFundingAdmission(nowMs: number, ttlMs: number): FundingAdmissionResult {
+  acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): FundingAdmissionResult {
     const now = validTimestamp(nowMs);
+    const owner = validKey(ownerToken);
     if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 15 * 60_000) {
       throw new BudgetError("invalid_budget_input");
     }
     return this.ctx.storage.transactionSync(() => {
-      const current = this.fundingAdmissionExpiry();
-      if (current !== null && current > now) {
-        return { acquired: false, active: true, expiresAtMs: current };
+      const current = this.fundingAdmissionState();
+      if (current.expiresAtMs !== null && current.expiresAtMs > now && current.ownerToken === owner) {
+        return { acquired: true, active: true, expiresAtMs: current.expiresAtMs };
+      }
+      if (current.expiresAtMs !== null && current.expiresAtMs > now) {
+        return { acquired: false, active: true, expiresAtMs: current.expiresAtMs };
       }
       const expiresAtMs = now + ttlMs;
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET expires_at_ms = ? WHERE singleton = 1",
+        "UPDATE funding_admission SET expires_at_ms = ?, owner_token = ? WHERE singleton = 1",
         expiresAtMs,
+        owner,
       );
       return { acquired: true, active: true, expiresAtMs };
     });
@@ -602,7 +614,7 @@ export class RelayBudget extends DurableObject<Env> {
 
   fundingAdmissionSnapshot(nowMs: number): FundingAdmissionResult {
     const now = validTimestamp(nowMs);
-    const expiresAtMs = this.fundingAdmissionExpiry();
+    const expiresAtMs = this.fundingAdmissionState().expiresAtMs;
     const active = expiresAtMs !== null && expiresAtMs > now;
     return { acquired: false, active, expiresAtMs: active ? expiresAtMs : null };
   }
@@ -610,20 +622,21 @@ export class RelayBudget extends DurableObject<Env> {
   consumeFundingAdmission(nowMs: number): FundingAdmissionResult {
     validTimestamp(nowMs);
     return this.ctx.storage.transactionSync(() => {
-      const current = this.fundingAdmissionExpiry();
+      const current = this.fundingAdmissionState().expiresAtMs;
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET expires_at_ms = NULL WHERE singleton = 1",
+        "UPDATE funding_admission SET expires_at_ms = NULL, owner_token = NULL WHERE singleton = 1",
       );
       return { acquired: false, active: false, expiresAtMs: current };
     });
   }
 
-  private fundingAdmissionExpiry(): number | null {
-    return this.ctx.storage.sql
-      .exec<{ expires_at_ms: number | null }>(
-        "SELECT expires_at_ms FROM funding_admission WHERE singleton = 1",
+  private fundingAdmissionState(): { expiresAtMs: number | null; ownerToken: string | null } {
+    const row = this.ctx.storage.sql
+      .exec<{ expires_at_ms: number | null; owner_token: string | null }>(
+        "SELECT expires_at_ms, owner_token FROM funding_admission WHERE singleton = 1",
       )
-      .one().expires_at_ms;
+      .one();
+    return { expiresAtMs: row.expires_at_ms, ownerToken: row.owner_token };
   }
 
   private readTotals(budgetClass: "control" | "exit", dayKey: string): TotalsRow {

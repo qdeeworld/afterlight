@@ -44,6 +44,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 ## Nonce and receipt discipline
 
 - One relayer account has one active nonce lane. A `RESERVED` or `SUBMITTED` operation blocks a different sponsored operation until it is released or finalized.
+- Every funding attempt generates a fresh 256-bit admission owner in the browser. The checkpoint plan and ten-minute funding lease are bound to that owner: an exact retry from the same attempt is idempotent, while another browser receives a distinct semantic key and cannot reuse the admitted checkpoint. The owner is never returned in the response, placed in calldata, or derived from a wallet, note, vault, or application key.
 - A timed-out receipt remains `SUBMITTED`; its full maximum stays reserved.
 - Retry only the exact original request. A `SUBMITTED` exit reconciles its stored hash without another broadcast. A crash-left `RESERVED` exit revalidates and rebroadcasts only the exact signed transaction artifact persisted before the first broadcast attempt, then reconciles the deterministic hash.
 - RPC duplicate and unknown-result errors are transport-ambiguous, never proof of rejection. Keep their reservations locked until receipt and nonce evidence resolves them.

@@ -77,9 +77,9 @@ export default {
         });
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
-        await requireCheckpointHeaders(request, env);
+        const admissionToken = await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
-        plan = await prepareCheckpointPlan(env, Date.now());
+        plan = await prepareCheckpointPlan(env, Date.now(), admissionToken);
         if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
           beforeFreshExecution = async () => {
             const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
@@ -89,6 +89,7 @@ export default {
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
               Number(ttlMs),
+              admissionToken,
             );
             if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
           };

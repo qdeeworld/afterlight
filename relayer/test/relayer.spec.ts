@@ -1,3 +1,4 @@
+import { env } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import { describe, expect, it } from "vitest";
 
@@ -7,13 +8,19 @@ import {
   encodeRelayRequest,
   type RelayRequest,
 } from "../src/schema.js";
-import { isAllowedOrigin, rateLimitRelay, RelayHttpError } from "../src/core.js";
+import {
+  isAllowedOrigin,
+  prepareCheckpointPlan,
+  rateLimitRelay,
+  RelayHttpError,
+} from "../src/core.js";
 import { exitRateLimitIdentity, requireFundingAdmission } from "../src/index.js";
 
 const origin = "https://afterlight.invalid";
 const contract = "0x1234";
 const token = "0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d";
 const amount = 10_000_000_000_000_000_000n;
+const admissionToken = "a".repeat(64);
 
 describe("Afterlight Phase A relay Worker", () => {
   it("matches only exact origins from the configured transition allowlist", () => {
@@ -113,6 +120,7 @@ describe("Afterlight Phase A relay Worker", () => {
         headers: {
           origin,
           "x-afterlight-intent": "funding-checkpoint",
+          "x-afterlight-admission": admissionToken,
         },
       }),
     );
@@ -132,6 +140,36 @@ describe("Afterlight Phase A relay Worker", () => {
     });
     expect(JSON.stringify(body)).not.toMatch(/wallet|vault|signature|ready/i);
   });
+
+  it("binds checkpoint idempotency to one unexposed funding admission owner", async () => {
+    const fixedTime = 1_787_999_999_000;
+    const first = await prepareCheckpointPlan(env, fixedTime, admissionToken);
+    const sameOwnerRetry = await prepareCheckpointPlan(env, fixedTime, admissionToken);
+    const otherOwner = await prepareCheckpointPlan(env, fixedTime, "b".repeat(64));
+
+    expect(sameOwnerRetry.fingerprint).toBe(first.fingerprint);
+    expect(sameOwnerRetry.semanticKey).toBe(first.semanticKey);
+    expect(otherOwner.fingerprint).not.toBe(first.fingerprint);
+    expect(otherOwner.semanticKey).not.toBe(first.semanticKey);
+    expect(otherOwner.call).toEqual(first.call);
+    expect(JSON.stringify(first)).not.toContain(admissionToken);
+  });
+
+  it.each([undefined, "", "A".repeat(64), "a".repeat(63), "g".repeat(64)])(
+    "rejects a missing or malformed checkpoint admission token (%s)",
+    async (candidate) => {
+      const headers: Record<string, string> = {
+        origin,
+        "x-afterlight-intent": "funding-checkpoint",
+      };
+      if (candidate !== undefined) headers["x-afterlight-admission"] = candidate;
+      const response = await exports.default.fetch(
+        new Request("https://relay.invalid/v1/checkpoint", { method: "POST", headers }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ status: "error", code: "invalid_admission_token" });
+    },
+  );
 
   it("fails closed before a live funding checkpoint when capacity is not ready", () => {
     expect(() => requireFundingAdmission({
@@ -156,6 +194,7 @@ describe("Afterlight Phase A relay Worker", () => {
           origin,
           "content-length": "0",
           "x-afterlight-intent": "funding-checkpoint",
+          "x-afterlight-admission": admissionToken,
         },
         body: "",
       }),

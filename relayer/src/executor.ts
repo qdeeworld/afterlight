@@ -116,7 +116,7 @@ export interface BudgetCoordinator {
   ): Promise<BudgetMutationResult>;
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
   activeSnapshot(): Promise<ActiveBudgetSnapshot>;
-  acquireFundingAdmission(nowMs: number, ttlMs: number): Promise<FundingAdmissionResult>;
+  acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
   fundingAdmissionSnapshot(nowMs: number): Promise<FundingAdmissionResult>;
   consumeFundingAdmission(nowMs: number): Promise<FundingAdmissionResult>;
 }

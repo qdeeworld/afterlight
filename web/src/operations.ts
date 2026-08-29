@@ -32,8 +32,6 @@ import type { ReadySession } from "./wallet.ts";
 import { waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
 
-const CHECKPOINT_SELECTOR = "0x680f3f85ab85ad72c372d5d99610c8c5ffd7ebf3a1f26fbd21fa999346525d";
-
 export function generateKey(): LocalStarkKey {
   return LocalStarkKey.generate();
 }
@@ -74,61 +72,40 @@ function base(vaultId: string, signerKey: string, state: string, epoch: string, 
 }
 
 async function checkpoint(): Promise<string> {
-  const startedBlock = await provider.getBlockNumber();
-  const startedAt = Math.floor(Date.now() / 1_000);
-  let returnedHash: string | undefined;
-  let responseLost = false;
-  let responseReceived = false;
-  try {
-    const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
-      method: "POST",
-      headers: { "x-afterlight-intent": "funding-checkpoint" },
-      cache: "no-store",
-      credentials: "omit",
-      referrerPolicy: "no-referrer",
-    });
-    responseReceived = true;
-    const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
-    if (response.ok && body.status === "relayed" && body.result?.transactionHash && ["accepted", "duplicate"].includes(String(body.result.status))) {
-      returnedHash = num.toHex(BigInt(body.result.transactionHash));
-    } else {
-      throw new Error("The neutral funding checkpoint was rejected. No private funds moved.");
-    }
-  } catch (error) {
-    if (responseReceived) {
-      throw new Error("The neutral funding checkpoint was rejected. No private funds moved.", { cause: error });
-    }
-    responseLost = true;
-    // A Worker response may be lost after its single broadcast. Reconcile the
-    // public, payload-free checkpoint event before declaring the attempt dead.
-  }
-  if (!returnedHash && !responseLost) {
-    throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
-  }
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const result = await provider.getEvents({
-      from_block: { block_number: startedBlock },
-      to_block: "latest",
-      address: CONTRACT,
-      keys: [[CHECKPOINT_SELECTOR]],
-      chunk_size: 10,
-    });
-    const event = result.events
-      .filter((candidate) => {
-        if (!candidate.transaction_hash || candidate.data.length < 3) return false;
-        const hash = num.toHex(BigInt(candidate.transaction_hash));
-        const syncedAt = Number(BigInt(candidate.data[2] ?? "0"));
-        return (!returnedHash || hash === returnedHash) && syncedAt >= startedAt - 30;
-      })
-      .at(-1);
-    if (event?.transaction_hash) {
-      const transactionHash = num.toHex(BigInt(event.transaction_hash));
+  const admissionToken = randomHex(32);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
+        method: "POST",
+        headers: {
+          "x-afterlight-intent": "funding-checkpoint",
+          "x-afterlight-admission": admissionToken,
+        },
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      const body = await response.json() as { status?: string; result?: { status?: string; transactionHash?: string } };
+      if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash || !["accepted", "duplicate"].includes(String(body.result.status))) {
+        throw new Error("checkpoint_rejected");
+      }
+      const transactionHash = num.toHex(BigInt(body.result.transactionHash));
       await waitForSuccess(transactionHash);
       return transactionHash;
+    } catch (error) {
+      if (error instanceof Error && error.message === "checkpoint_rejected") {
+        throw new Error("The neutral funding checkpoint was rejected. No private funds moved.", { cause: error });
+      }
+      if (attempt === 0) continue;
     }
-    if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
   throw new Error("The neutral funding checkpoint is unavailable. No private funds moved.");
+}
+
+function randomHex(bytes: number): string {
+  const value = new Uint8Array(bytes);
+  crypto.getRandomValues(value);
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function fundRecoveryReserve(input: {

@@ -88,13 +88,22 @@ describe("deployment-wide sponsorship coordinator", () => {
       active: false,
       expiresAtMs: null,
     });
-    const contenders = await Promise.all([
-      budget.acquireFundingAdmission(1_000, 600_000),
-      budget.acquireFundingAdmission(1_000, 600_000),
-    ]);
-    expect(contenders.filter(({ acquired }) => acquired)).toHaveLength(1);
-    expect(contenders.every(({ active, expiresAtMs }) => active && expiresAtMs === 601_000)).toBe(true);
-    expect((await budget.acquireFundingAdmission(601_000, 600_000)).acquired).toBe(true);
+    expect(await budget.acquireFundingAdmission(1_000, 600_000, owner)).toEqual({
+      acquired: true,
+      active: true,
+      expiresAtMs: 601_000,
+    });
+    expect(await budget.acquireFundingAdmission(2_000, 600_000, owner)).toEqual({
+      acquired: true,
+      active: true,
+      expiresAtMs: 601_000,
+    });
+    expect(await budget.acquireFundingAdmission(2_000, 600_000, alternateOwner)).toEqual({
+      acquired: false,
+      active: true,
+      expiresAtMs: 601_000,
+    });
+    expect((await budget.acquireFundingAdmission(601_000, 600_000, alternateOwner)).acquired).toBe(true);
     expect(await budget.consumeFundingAdmission(601_001)).toEqual({
       acquired: false,
       active: false,
