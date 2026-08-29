@@ -28,7 +28,8 @@
   "secrets": {
     "required": [
       "RELAYER_ACCOUNT_PRIVATE_KEY",
-      "STARKNET_RPC_AUTH_TOKEN"
+      "STARKNET_RPC_AUTH_TOKEN",
+      "EXIT_RPC_URL"
     ]
   },
   "durable_objects": {

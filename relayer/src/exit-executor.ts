@@ -88,7 +88,10 @@ export async function executePreparedClaim(payload: string, env: Env, budget: Bu
   }
 
   const provider = new RpcProvider({
-    nodeUrl: env.STARKNET_RPC_URL,
+    // Real Ready PROOF1 exit envelopes require the audited RPC 0.10.3 path.
+    // Keep its credential-bearing URL in a Worker secret rather than the
+    // public Wrangler configuration used by ordinary relay controls.
+    nodeUrl: env.EXIT_RPC_URL,
     headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
     plugins: false,
   });
