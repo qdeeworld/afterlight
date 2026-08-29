@@ -33,7 +33,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 
 1. Run `npm ci`, `npm run types`, `npm run check`, and `npm audit` on the exact commit.
 2. For a new environment, keep `SUBMIT_ENABLED=false`; deploy the Worker and Durable Object migration.
-3. Verify `/health` reports the intended submission state and exposes no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
+3. Verify `/health` reports the intended submission state and collapsed claim-capacity state, while exposing no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
 4. Verify the configured-origin preflight and each route with empty or invalid requests only.
 5. Fund the bounded relayer account within the approved spike cap.
 6. Install secrets, verify configuration readiness, and obtain fresh no-submit quotes.
@@ -44,8 +44,11 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 ## Nonce and receipt discipline
 
 - One relayer account has one active nonce lane. A `RESERVED` or `SUBMITTED` operation blocks a different sponsored operation until it is released or finalized.
+- Every funding attempt generates a fresh 256-bit admission owner in the browser and keeps it in tab-scoped session storage through ambiguous outcomes and reloads. The checkpoint plan and ten-minute funding lease are bound to that owner: an exact retry bypasses only the owner-blind browser health preflight, while the Worker repeats the owner-aware capacity check and atomic lease acquisition. An adopted hashless reservation excludes only its own exact fingerprint from that check and renews the same admission owner before broadcast. Another browser receives a distinct semantic key and cannot reuse the admitted checkpoint. Public health and every request without the matching owner continue to report the lease as occupied. The owner is never returned in the response, placed in calldata, or derived from a wallet, note, vault, or application key.
 - A timed-out receipt remains `SUBMITTED`; its full maximum stays reserved.
-- Retry only the exact original request. The executor reuses its stored transaction hash and reconciles the receipt without simulating, signing, or broadcasting again.
+- Retry only the exact original request. A `SUBMITTED` exit reconciles its stored hash without another broadcast. A crash-left `RESERVED` transaction returns its stored deterministic hash while the original two-minute owner lease remains live. Only after an atomic stale-owner takeover may a retry revalidate and rebroadcast the exact signed artifact persisted before the first broadcast attempt, then reconcile that hash.
+- RPC duplicate and unknown-result errors are transport-ambiguous, never proof of rejection. Keep their reservations locked until receipt and nonce evidence resolves them.
+- Before broadcasting any control or exit transaction, the relayer atomically stores the deterministic outer transaction hash and exact signed transaction on the owner-token-bound reservation. A hashless or prepared `RESERVED` row remains fenced to its live owner: an exact retry returns the existing state and hash without signing or rebroadcasting. After the two-minute liveness lease expires, the retry must atomically take ownership before it may prepare a hashless row or revalidate and rebroadcast a prepared artifact. This fence applies equally to controls and prepared private exits, and the displaced request can no longer prepare or release the row. A definitive RPC rejection releases and deletes a prepared control or exit artifact only while the rejecting request still owns it; an accepted or ambiguous broadcast keeps the exact stored hash serialized and only transitions it to `SUBMITTED` through acknowledged submission or receipt reconciliation. The public app keeps the exact ambiguous cancellation or claim package in tab-scoped session storage so retry uses the same note and authorization instead of creating another package. Terminal reconciliation deletes the server artifact and clears the browser package. Owner tokens and artifacts contain no application signing key and must never be logged or exported; artifacts are not retained after reconciliation.
 - A request with the same semantic operation but different signature, expiry, or exact fingerprint cannot reconcile the submitted transaction.
 - Never release a submitted reservation based only on an RPC timeout. Confirm the transaction or account nonce before any manual recovery.
 - A receipt fee above its reservation records the full spend and freezes all new sponsorship.
@@ -63,6 +66,7 @@ promotion; a green inert check is never production readiness evidence.
 Monitor through at least 2026-09-04:
 
 - `/health` availability and collapsed balance status;
+- `/health.claimCapacity`; stop supported-UI funding whenever `fundingStatus` is not `ready`. The browser checks this state and the checkpoint route freshly rechecks it immediately before atomically acquiring the deployment-wide ten-minute funding lease. The exact ready allowance is `12 STRK`, covering one claim or cancellation, and funding is ready only when observed total locked liability is zero, sponsorship is unfrozen, neither control nor exit has an active shared-nonce reservation, no funding lease is active, and the exit ledger can still reserve the full `7.5 STRK` ceiling that UTC day. The release pins the contract's `300`-second checkpoint age. An observed liability consumes the lease; abandonment rolls back only after ten minutes, when the checkpoint has already been stale for five minutes. This lease serializes the supported route but cannot authorize the permissionless contract checkpoint. Monitor for unexpected checkpoint and funding events; an externally created vault remains fully backed but its exit is queued until exact sponsor capacity is restored. After either exit, the remaining `6 STRK` allowance and same-day ledger spend intentionally exhaust capacity until a newly reviewed replenishment on a later UTC day.
 - relayer public STRK balance below the configured threshold;
 - Durable Object sponsorship freeze state;
 - reservations remaining `RESERVED` or `SUBMITTED` beyond the receipt window;
@@ -76,6 +80,11 @@ separate `7.5 STRK` full resource-bounds ceiling, a separate exact `6 STRK`
 pool allowance, and a `1 STRK` post-spend balance floor. Replace any cap only
 from fresh quotes; never enable exposure larger than the funded operational
 bound.
+
+Control and exit spend use separate UTC-day totals because their policy ceilings
+are intentionally different. They still share the same reservation table and
+single active nonce lane; splitting accounting does not permit concurrent
+broadcasts from the neutral account.
 
 Do not log request bodies, signatures, IP addresses, wallet addresses,
 application keys, vault IDs, transaction fingerprints, RPC authorization, or

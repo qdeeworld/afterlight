@@ -31,7 +31,23 @@ export type ResourceBounds = Readonly<{
   l2_gas: Readonly<{ max_amount: bigint; max_price_per_unit: bigint }>;
 }>;
 
+export const LOCKED_AFTERLIGHT_ADDRESS: string;
+export const LOCKED_AMOUNT_FRI: bigint;
+export const LOCKED_NEUTRAL_ADDRESS: string;
+export const LOCKED_POOL_ADDRESS: string;
+export const LOCKED_POOL_CLASS_HASH: string;
+export const LOCKED_TOKEN_ADDRESS: string;
+export const OPEN_NOTE_PACKED_VALUE: bigint;
+export const PROOF1_HEADER: string;
+
 export function validatePolicy(policy: unknown): ExitPolicyResult;
+export function buildExitLocks(input: unknown): Readonly<{
+  callSha256: string;
+  proofDataSha256: string;
+  proofOutputSha256: string;
+  proofFactsSha256: string;
+  bindingSha256: string;
+}>;
 export function validatePreparedExitPackage(input: unknown, policy: unknown): ValidatedExit;
 export function proofFactsForFeeEstimate(raw: readonly string[]): readonly string[];
 export function parseResourceBounds(value: unknown): ResourceBounds;

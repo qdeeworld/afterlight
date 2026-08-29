@@ -64,7 +64,11 @@ Relayer availability is operationally important but not trusted for correctness.
 | Owner veto races a mature claim | First valid included transition wins; the other sees changed state |
 | Failed token/pool settlement leaves false state | Cairo transaction rollback restores state and liability |
 | Tokens are donated directly to the helper | No administrative withdrawal exists; donated surplus remains inert and cannot change locked liabilities |
-| Relayer drains sponsorship | Schema limits, expiry, rate limits, per-call cap, daily budget, nonce serialization, and breach freeze |
+| Relayer drains sponsorship | Schema limits, expiry, validation before scarce per-vault rate limiting, separate control/exit daily caps, shared nonce serialization, and breach freeze |
+| Prepared proof swaps the pool implementation or adds actions | Pinned live pool class plus an exact `WriteOnce → EmitOpenNoteCreated → Invoke` action sequence and canonical destination-note storage write |
+| Ambiguous broadcast is retried or released | `SUBMITTED` retains its hash and reservation; duplicate/unknown RPC results reconcile without signing or rebroadcasting |
+| Browser reload loses the only exact retry artifact | The opaque checkpoint admission owner and any ambiguous exact cancellation/claim package are retained in tab-scoped session storage until terminal reconciliation; exact-exit packages are privacy-sensitive but contain no owner or successor application secret and are never sent to logs or analytics |
+| Reserve demand exceeds current neutral-sponsor capacity | The supported UI and checkpoint route fail closed unless live allowance, balance, exit cap, health floor, liability and lease state reconcile. The permissionless contract checkpoint can still admit another fully backed vault outside that route, so sponsorship is explicitly capacity-limited and an exit may queue until capacity is restored; no vault can consume another vault's backing. |
 | Application logs correlate a wallet or vault | Request bodies, signatures, IPs, wallet addresses, vault IDs, and fingerprints are excluded from application logs; infrastructure metadata remains a separate limit |
 
 ## Relayer and hosting metadata boundary

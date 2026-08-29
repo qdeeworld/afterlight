@@ -9,7 +9,7 @@ Afterlight separates private value movement, application authorization, and tran
 | Ready X and STRK20 | Shielded balances, private invocation, proof preparation, and exact open-note settlement | Owner or successor application secrets outside the user's device |
 | Afterlight Cairo contract | Vault state, signed authorization, liabilities, timing, exact-note binding, and terminal settlement | Ready wallet identity assumptions |
 | Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, proof-envelope/call binding, and independent managed-exit receipt reconciliation | Relayer account key |
-| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, checkpoints, and strictly validated exact-note claim packages from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
+| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, checkpoints, and strictly validated exact-note claim/cancellation packages from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
 
 ## Action routing
 
@@ -17,13 +17,19 @@ Afterlight separates private value movement, application authorization, and tran
 
 `HEARTBEAT`, `REQUEST`, and `VETO` are public state transitions authorized by per-vault Stark signatures. Any submitter may relay a valid authorization; the submitter is never the authority.
 
-For a public claim, Ready creates the exact OPEN note and proof locally. The
-successor application key binds that literal note to the current vault, epoch,
-nonce, token and amount. A neutral sponsor accepts only the locked pool call,
+For a private exit, Ready creates the exact OPEN note and proof locally. The
+successor application key binds a claim—or the owner application key binds a
+cancellation—to that literal note, current vault, epoch, nonce, token and
+amount. A neutral sponsor accepts only the locked pool call,
 proof facts, application signature, live state, exact allowance and bounded
 resource quote, then signs and broadcasts the outer transaction once. The
 contract and pool remain authoritative; package preparation alone is not
 execution evidence.
+
+The sponsor independently pins the live STRK20 pool class and permits exactly
+`WriteOnce`, `EmitOpenNoteCreated`, then `Invoke`. The first action must write
+the canonical packed token value to the storage key derived from the signed
+destination note. Extra actions or writes fail before signing.
 
 ```text
 Ready X + STRK20 pool
@@ -70,6 +76,14 @@ held token balance >= existing locked liabilities + new fixed reserve
 ```
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
+
+The public product also reads the sponsor's collapsed claim-capacity status.
+It disables new funding unless total liability is zero and one claim or cancellation is covered by the exact pool allowance,
+the bounded outer fee, and the post-spend health floor. The supported public route serializes one funding admission at a time. This is an availability
+guard, not an onchain authorization or per-vault capacity reservation: the deployed contract intentionally permits anyone to refresh its one-shot
+checkpoint, and multiple fully collateralized vault liabilities may exist. A caller bypassing the supported route cannot consume another vault's
+backing, but neither that caller nor an ordinary user is promised immediate neutral-sponsor capacity at a future exit. Claim and cancellation fail
+closed and may wait until the operator restores the exact allowance, balance, and daily budget. The contract and pool remain final.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or
