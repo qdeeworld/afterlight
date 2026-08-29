@@ -132,6 +132,8 @@ describe("neutral exact-exit signing boundary", () => {
     ["malformed object", {}],
     ["malformed amount", { amount: "not-a-fee" }],
     ["zero", { amount: "0x0" }],
+    ["non-FRI unit", { amount: "70", unit: "WEI" }],
+    ["malformed unit", { amount: "70", unit: null }],
   ])("keeps an accepted receipt with a %s actual fee uncertain", async (_label, actualFee) => {
     const transactionHash = "0xabc";
     const binding = "a".repeat(64);

@@ -542,6 +542,10 @@ async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blo
 function hex(value: string | bigint): string { return `0x${BigInt(value).toString(16)}`; }
 
 function readFee(value: unknown): string {
+  if (typeof value === "object" && value !== null) {
+    const unit = (value as Record<string, unknown>).unit;
+    if (unit !== undefined && unit !== "FRI") throw new ExitExecutorError("exit_uncertain");
+  }
   const amount = typeof value === "string"
     ? value
     : typeof value === "object" && value !== null
