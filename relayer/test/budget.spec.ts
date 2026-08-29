@@ -138,6 +138,25 @@ describe("deployment-wide sponsorship coordinator", () => {
     ).toBe("reserved");
   });
 
+  it("reports the active nonce lane globally across class and UTC rollover", async () => {
+    const budget = freshBudget();
+    await budget.reserve(reserveInput(semantic, exact, "60", dayOne, 1, "control"));
+    expect(await budget.snapshot(dayTwo, "exit")).toMatchObject({
+      reservedCount: 0,
+      submittedCount: 0,
+    });
+    expect(await budget.activeSnapshot()).toEqual({
+      reservedCount: 1,
+      submittedCount: 0,
+      sponsorshipFrozen: false,
+    });
+    await budget.markSubmitted(semantic, exact, "0xabc", 2);
+    expect(await budget.activeSnapshot()).toMatchObject({
+      reservedCount: 0,
+      submittedCount: 1,
+    });
+  });
+
   it("keeps semantic idempotency global while UTC totals roll over", async () => {
     const budget = freshBudget();
     await budget.reserve(reserveInput(semantic, exact, "100", dayOne));

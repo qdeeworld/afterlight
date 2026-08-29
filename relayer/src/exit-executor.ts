@@ -78,7 +78,7 @@ export type ClaimCapacity = Readonly<{
   fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
 }>;
 
-export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinator, "snapshot">): Promise<ClaimCapacity> {
+export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot">): Promise<ClaimCapacity> {
   try {
     const provider = new RpcProvider({
       nodeUrl: env.EXIT_RPC_URL,
@@ -119,15 +119,15 @@ export async function readClaimCapacity(env: Env, budget?: Pick<BudgetCoordinato
       : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
     if (budget === undefined) return chainCapacity;
     const dayKey = new Date().toISOString().slice(0, 10);
-    const [exitLedger, controlLedger] = await Promise.all([
+    const [exitLedger, activeLedger] = await Promise.all([
       budget.snapshot(dayKey, "exit"),
-      budget.snapshot(dayKey, "control"),
+      budget.activeSnapshot(),
     ]);
     return applyLedgerCapacity(chainCapacity, {
       ...exitLedger,
-      reservedCount: exitLedger.reservedCount + controlLedger.reservedCount,
-      submittedCount: exitLedger.submittedCount + controlLedger.submittedCount,
-      sponsorshipFrozen: exitLedger.sponsorshipFrozen || controlLedger.sponsorshipFrozen,
+      reservedCount: activeLedger.reservedCount,
+      submittedCount: activeLedger.submittedCount,
+      sponsorshipFrozen: activeLedger.sponsorshipFrozen,
     });
   } catch {
     return unknownCapacity();
@@ -171,7 +171,13 @@ export function validatePreparedExitPayload(payload: string): ValidatedExit {
   } catch { throw new ExitExecutorError("invalid_exit"); }
 }
 
-export async function executePreparedExit(payload: string, env: Env, budget: BudgetCoordinator, prevalidated?: ValidatedExit): Promise<ExitResult> {
+export async function executePreparedExit(
+  payload: string,
+  env: Env,
+  budget: BudgetCoordinator,
+  prevalidated?: ValidatedExit,
+  afterAuthenticated?: () => Promise<void>,
+): Promise<ExitResult> {
   const validated = prevalidated ?? validatePreparedExitPayload(payload);
 
   // The binding is already a domain-separated SHA-256 over the complete exit
@@ -256,6 +262,11 @@ export async function executePreparedExit(payload: string, env: Env, budget: Bud
     validateBalanceForExit(snapshot.balance, networkCap, BigInt(EXIT_POLICY.postSpendHealthFloorFri));
   } catch { throw exitStage("fee_and_balance"); }
 
+  // A successful authenticated simulation proves the application signature,
+  // proof, exact note and live state before consuming the victim-specific
+  // vault/action quota. Invalid callers remain bounded only by global ingress.
+  await afterAuthenticated?.();
+
   const reservation = await budget.reserve({
     budgetClass: "exit",
     dayKey: new Date().toISOString().slice(0, 10),
@@ -319,10 +330,17 @@ export async function executePreparedExit(payload: string, env: Env, budget: Bud
         broadcastStarted = false;
         throw new ExitExecutorError("exit_unavailable");
       }
+      // The deterministic outer hash is already known. Persist it before
+      // returning an ambiguous result so an exact retry can perform receipt-
+      // only reconciliation rather than leaving a hashless RESERVED slot.
+      await persistAmbiguousExitHash(budget, validated, expectedHash);
       throw new ExitExecutorError("exit_uncertain");
     }
     const transactionHash = normalizeHex(response.transaction_hash);
-    if (transactionHash !== expectedHash) throw new ExitExecutorError("exit_uncertain");
+    if (transactionHash !== expectedHash) {
+      await persistAmbiguousExitHash(budget, validated, expectedHash);
+      throw new ExitExecutorError("exit_uncertain");
+    }
     submissionStage = "mark_submitted";
     await budget.markSubmitted(semanticKey, validated.bindingSha256, transactionHash, Date.now());
     submissionStage = "receipt";
@@ -342,6 +360,19 @@ export async function executePreparedExit(payload: string, env: Env, budget: Bud
     console.error(JSON.stringify({ event: "exit_submission_failed", stage: submissionStage }));
     throw broadcastStarted ? new ExitExecutorError("exit_uncertain") : new ExitExecutorError("exit_unavailable");
   }
+}
+
+export async function persistAmbiguousExitHash(
+  budget: BudgetCoordinator,
+  validated: Pick<ValidatedExit, "bindingSha256">,
+  expectedHash: string,
+): Promise<void> {
+  await budget.markSubmitted(
+    validated.bindingSha256,
+    validated.bindingSha256,
+    normalizeHex(expectedHash),
+    Date.now(),
+  );
 }
 
 export async function reconcileSubmittedExit(

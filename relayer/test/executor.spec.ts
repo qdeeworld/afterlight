@@ -133,15 +133,17 @@ describe("fail-closed exact-call executor", () => {
       .mockResolvedValueOnce({ status: "pending" })
       .mockResolvedValueOnce(successfulReceipt());
     const budget = freshBudget();
-    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+    const beforeFreshExecution = vi.fn(async () => {});
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs, beforeFreshExecution)).rejects.toThrowError(
       new ExecutorError("receipt_unreconciled"),
     );
     const nextBucket: RelayPlan = { ...plan, semanticKey: "b".repeat(64) };
-    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 15_000)).resolves.toMatchObject({
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 15_000, beforeFreshExecution)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
       actualFeeFri: "70",
     });
+    expect(beforeFreshExecution).toHaveBeenCalledTimes(1);
     expect(adapter.simulateExact).toHaveBeenCalledTimes(1);
     expect(adapter.signAndSubmitExact).toHaveBeenCalledTimes(1);
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);

@@ -85,6 +85,12 @@ export type BudgetSnapshot = Readonly<{
   sponsorshipFrozen: boolean;
 }>;
 
+export type ActiveBudgetSnapshot = Readonly<{
+  reservedCount: number;
+  submittedCount: number;
+  sponsorshipFrozen: boolean;
+}>;
+
 export class BudgetError extends Error {
   readonly code:
     | "invalid_budget_input"
@@ -440,6 +446,21 @@ export class RelayBudget extends DurableObject<Env> {
       committedCount: count("COMMITTED"),
       revertedCount: count("REVERTED"),
       breachedCount: count("BREACHED"),
+      sponsorshipFrozen: this.isFrozen(),
+    };
+  }
+
+  activeSnapshot(): ActiveBudgetSnapshot {
+    const counts = this.ctx.storage.sql
+      .exec<{ status: string; count: number }>(
+        "SELECT status, COUNT(*) AS count FROM reservations WHERE status IN ('RESERVED', 'SUBMITTED') GROUP BY status",
+      )
+      .toArray();
+    const count = (status: "RESERVED" | "SUBMITTED"): number =>
+      counts.find((row) => row.status === status)?.count ?? 0;
+    return {
+      reservedCount: count("RESERVED"),
+      submittedCount: count("SUBMITTED"),
       sponsorshipFrozen: this.isFrozen(),
     };
   }

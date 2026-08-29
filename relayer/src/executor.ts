@@ -1,5 +1,6 @@
 import type {
   ActiveBudgetLookupResult,
+  ActiveBudgetSnapshot,
   BudgetMutationResult,
   BudgetReserveInput,
   BudgetReserveResult,
@@ -90,6 +91,7 @@ export interface BudgetCoordinator {
     nowMs: number,
   ): Promise<BudgetMutationResult>;
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
+  activeSnapshot(): Promise<ActiveBudgetSnapshot>;
 }
 
 export type ExecutorPolicy = Readonly<{
@@ -144,6 +146,7 @@ export async function executeRelayPlan(
   adapter: StarknetRelayAdapter,
   budget: BudgetCoordinator,
   nowMs: number,
+  beforeFreshExecution?: () => Promise<void>,
 ): Promise<ExecutionResult> {
   if (!policy.submitEnabled) throw new ExecutorError("submission_disabled");
   const dayKey = utcDayKey(nowMs);
@@ -182,6 +185,10 @@ export async function executeRelayPlan(
     }
     return duplicateResult(active.state, active.transactionHash);
   }
+
+  // Admission checks that would reject an already-submitted retry belong only
+  // on the fresh path, after both semantic and fingerprint reconciliation.
+  await beforeFreshExecution?.();
 
   const simulation = await adapter.simulateExact(plan);
   if (!simulation.ok) throw new ExecutorError("simulation_failed");

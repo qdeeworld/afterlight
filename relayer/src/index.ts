@@ -63,25 +63,29 @@ export default {
 
       let plan: RelayPlan;
       let estimateOnly = false;
+      let beforeFreshExecution: (() => Promise<void>) | undefined;
       if (url.pathname === EXIT_PATH) {
         requireExitHeaders(request, env);
         await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
         const validated = validatePreparedExitPayload(payload);
-        await rateLimitValidatedExit(env, await exitRateLimitIdentity(validated.action, validated.metadata.vaultId));
         const readiness = executorReadiness(env);
         if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-        const result = await executePreparedExit(payload, env, budget, validated);
+        const result = await executePreparedExit(payload, env, budget, validated, async () => {
+          await rateLimitValidatedExit(env, await exitRateLimitIdentity(validated.action, validated.metadata.vaultId));
+        });
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         await requireCheckpointHeaders(request, env);
         await rateLimitCheckpoint(env);
-        if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
-          const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-          requireFundingAdmission(await readClaimCapacity(env, budget));
-        }
         plan = await prepareCheckpointPlan(env, Date.now());
+        if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
+          beforeFreshExecution = async () => {
+            const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
+            requireFundingAdmission(await readClaimCapacity(env, budget));
+          };
+        }
       } else {
         requireRelayHeaders(request, env);
         estimateOnly = url.searchParams.get("mode") === "estimate";
@@ -140,6 +144,7 @@ export default {
           createStarknetRelayAdapter(env),
           budget,
           nowMs,
+          beforeFreshExecution,
         );
         return jsonResponse(
           { status: "relayed", result },

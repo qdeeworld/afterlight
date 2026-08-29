@@ -16,7 +16,7 @@ import {
   validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit } from "../src/exit-executor.js";
+import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, persistAmbiguousExitHash, reconcileSubmittedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
@@ -40,6 +40,18 @@ describe("neutral exact-exit signing boundary", () => {
       category: "rpc_other",
       definitiveReject: false,
     });
+  });
+
+  it("persists the deterministic outer hash for ambiguous broadcast reconciliation", async () => {
+    const bindingSha256 = "a".repeat(64);
+    const budget = { markSubmitted: vi.fn().mockResolvedValue({ outcome: "submitted" }) } as any;
+    await persistAmbiguousExitHash(budget, { bindingSha256 } as any, "0x00abc");
+    expect(budget.markSubmitted).toHaveBeenCalledWith(
+      bindingSha256,
+      bindingSha256,
+      "0xabc",
+      expect.any(Number),
+    );
   });
 
   it("accepts only the exact WriteOnce, open-note, Afterlight Invoke package and pinned pool class", () => {
@@ -137,15 +149,17 @@ describe("neutral exact-exit signing boundary", () => {
       }),
       finalize: vi.fn().mockResolvedValue({ outcome: "committed" }),
     } as any;
+    const afterAuthenticated = vi.fn(async () => {});
     await expect(executePreparedExit("{}", {
       SUBMIT_ENABLED: "false",
       EXIT_RPC_URL: "https://rpc.invalid",
       STARKNET_RPC_AUTH_TOKEN: "configured",
-    } as any, budget, validated)).resolves.toMatchObject({
+    } as any, budget, validated, afterAuthenticated)).resolves.toMatchObject({
       status: "accepted",
       transactionHash,
     });
     expect(budget.finalize).toHaveBeenCalledOnce();
+    expect(afterAuthenticated).not.toHaveBeenCalled();
   });
 
   it("validates before the kill switch and never signs a fresh disabled exit", async () => {
