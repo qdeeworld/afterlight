@@ -4,7 +4,7 @@ import { RELAYER_URL, STRK } from "./config.ts";
 import { assertMainnet, readLiability, readVault } from "./chain.ts";
 import { parseInvitation, stateName, type RecoveryInvitation, type Role, type VaultSnapshot, type WalletStatus } from "./model.ts";
 import { connectReady, detectReady, type ReadySession } from "./wallet.ts";
-import { exportKey, fundRecoveryReserve, generateKey, prepareExitPackage, relayControl, restoreKey, submitExitPackage } from "./operations.ts";
+import { ExitSubmissionError, exportKey, fundRecoveryReserve, generateKey, hasPendingCheckpointReconciliation, prepareExitPackage, relayControl, restoreKey, submitExitPackage } from "./operations.ts";
 import type { LocalStarkKey } from "../../client/src/keys.ts";
 
 let role: Role = (new URL(location.href).searchParams.get("role") === "successor") ? "successor" : "owner";
@@ -19,7 +19,39 @@ let notice = "Loading the live Starknet Mainnet product…";
 let busy = false;
 let transactionHash = "";
 let costAcknowledged = false;
-let claimRetryBlocked = false;
+type PendingExit = Readonly<{
+  action: "CANCEL_REFUND" | "CLAIM";
+  vaultId: string;
+  exitPackage: Readonly<Record<string, unknown>>;
+  balanceBefore: string;
+}>;
+
+const PENDING_EXIT_STORAGE_KEY = "afterlight:pending-exit:v1";
+
+function restorePendingExit(): PendingExit | undefined {
+  try {
+    const value = JSON.parse(sessionStorage.getItem(PENDING_EXIT_STORAGE_KEY) ?? "null") as Partial<PendingExit> | null;
+    if (
+      value === null ||
+      (value.action !== "CANCEL_REFUND" && value.action !== "CLAIM") ||
+      !/^0x[0-9a-f]{1,64}$/i.test(value.vaultId ?? "") ||
+      typeof value.exitPackage !== "object" ||
+      value.exitPackage === null ||
+      !/^[0-9]+$/.test(value.balanceBefore ?? "")
+    ) return undefined;
+    return value as PendingExit;
+  } catch {
+    return undefined;
+  }
+}
+
+let pendingExit = restorePendingExit();
+
+function retainPendingExit(value: PendingExit | undefined): void {
+  pendingExit = value;
+  if (value === undefined) sessionStorage.removeItem(PENDING_EXIT_STORAGE_KEY);
+  else sessionStorage.setItem(PENDING_EXIT_STORAGE_KEY, JSON.stringify(value));
+}
 let exitCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let fundingCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let reserveMode: "NORMAL" | "FAST_DEMO" = "NORMAL";
@@ -202,10 +234,10 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
   const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note." : "The reserve returned privately to its owner.";
   return `<section class="control-panel live-state" data-vault-state="${current}"><div class="control-heading"><div><span class="state-chip">${current}</span><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
-    ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || exitCapacity !== "ready" || busy ? "disabled" : ""}>Cancel and return 1 STRK privately</button>${exitCapacity !== "ready" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${role === "owner" && current === "ACTIVE" ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Send private heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || (exitCapacity !== "ready" && pendingExit?.action !== "CANCEL_REFUND") || busy ? "disabled" : ""}>${pendingExit?.action === "CANCEL_REFUND" ? "Reconcile pending cancellation" : "Cancel and return 1 STRK privately"}</button>${exitCapacity !== "ready" && pendingExit?.action !== "CANCEL_REFUND" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     ${role === "owner" && current === "GRACE" ? `<button class="button primary" data-control="VETO" ${!applicationKey || busy ? "disabled" : ""}>Veto recovery</button>` : ""}
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!applicationKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
-    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && exitCapacity === "ready" && !claimRetryBlocked ? "" : "disabled"} data-action="claim">${claimRetryBlocked ? "Claim awaiting reconciliation" : exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${role === "successor" && current === "GRACE" ? `<button class="button primary" ${claimReady && ready && applicationKey && (exitCapacity === "ready" || pendingExit?.action === "CLAIM") ? "" : "disabled"} data-action="claim">${pendingExit?.action === "CLAIM" ? "Reconcile pending claim" : exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady && pendingExit?.action !== "CLAIM" ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
     <p class="action-help">Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
   </section>`;
 }
@@ -316,8 +348,10 @@ function bindEvents(): void {
     event.preventDefault();
     const form = new FormData(event.currentTarget as HTMLFormElement);
     void run(async () => {
-      await refreshSponsorCapacity();
-      if (fundingCapacity !== "ready") throw new Error("New recovery reserves are paused until funding capacity is verified and available.");
+      if (!hasPendingCheckpointReconciliation()) {
+        await refreshSponsorCapacity();
+        if (fundingCapacity !== "ready") throw new Error("New recovery reserves are paused until funding capacity is verified and available.");
+      }
       if (!form.has("cost-ack") || !costAcknowledged) throw new Error("Confirm the exact 7 STRK private-wallet consequence first.");
       if (!ready || !applicationKey) throw new Error("Connect Ready X and generate the owner key first.");
       if (privateBalance === undefined || privateBalance < 7n * 10n ** 18n) throw new Error("At least 7 private STRK is required.");
@@ -359,13 +393,29 @@ function bindEvents(): void {
     void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated owner key first.");
-    await refreshSponsorCapacity();
-    if (exitCapacity !== "ready") throw new Error("Private cancellation is paused until sponsor exit capacity is restored.");
-    const balanceBefore = await ready.balance(STRK);
-    notice = "Ready X will prepare one exact private return note. The neutral sponsor pays the pool and network fees."; render();
-    const exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CANCEL_REFUND" });
-    notice = "Owner authorization and exact return note verified. Submitting through the neutral sponsor…"; render();
-    const result = await submitExitPackage(exitPackage);
+    const retained = pendingExit?.action === "CANCEL_REFUND" && pendingExit.vaultId === parsed.invitation.vaultId
+      ? pendingExit
+      : undefined;
+    if (retained === undefined) {
+      await refreshSponsorCapacity();
+      if (exitCapacity !== "ready") throw new Error("Private cancellation is paused until sponsor exit capacity is restored.");
+    }
+    const balanceBefore = retained === undefined ? await ready.balance(STRK) : BigInt(retained.balanceBefore);
+    let exitPackage = retained?.exitPackage;
+    if (exitPackage === undefined) {
+      notice = "Ready X will prepare one exact private return note. The neutral sponsor pays the pool and network fees."; render();
+      exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CANCEL_REFUND" });
+      retainPendingExit({ action: "CANCEL_REFUND", vaultId: parsed.invitation.vaultId, exitPackage, balanceBefore: balanceBefore.toString() });
+    }
+    notice = retained ? "Reconciling the exact pending private return. No new note or authorization is being created." : "Owner authorization and exact return note verified. Submitting through the neutral sponsor…"; render();
+    let result;
+    try {
+      result = await submitExitPackage(exitPackage);
+    } catch (error) {
+      if (error instanceof ExitSubmissionError && !error.ambiguous) retainPendingExit(undefined);
+      throw error;
+    }
+    retainPendingExit(undefined);
     transactionHash = result.transactionHash;
     vault = await readVault(parsed.invitation.vaultId);
     privateBalance = await ready.balance(STRK);
@@ -377,19 +427,29 @@ function bindEvents(): void {
   document.querySelector<HTMLButtonElement>("[data-action=claim]")?.addEventListener("click", () => void run(async () => {
     const parsed = parseInvitation(invitationText);
     if (!parsed.valid || !vault || !ready || !applicationKey) throw new Error("Connect Ready X and restore the designated successor key first.");
-    await refreshSponsorCapacity();
-    if (exitCapacity !== "ready") throw new Error("Private recovery is paused until sponsor exit capacity is restored.");
-    const balanceBefore = await ready.balance(STRK);
-    notice = "Ready X will prepare the exact private destination twice, then the neutral sponsor will submit it. The sponsor pays the pool and network fees."; render();
-    const claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CLAIM" });
-    notice = "Exact destination and designated-key authorization verified. Submitting through the neutral sponsor…"; render();
+    const retained = pendingExit?.action === "CLAIM" && pendingExit.vaultId === parsed.invitation.vaultId
+      ? pendingExit
+      : undefined;
+    if (retained === undefined) {
+      await refreshSponsorCapacity();
+      if (exitCapacity !== "ready") throw new Error("Private recovery is paused until sponsor exit capacity is restored.");
+    }
+    const balanceBefore = retained === undefined ? await ready.balance(STRK) : BigInt(retained.balanceBefore);
+    let claimPackage = retained?.exitPackage;
+    if (claimPackage === undefined) {
+      notice = "Ready X will prepare the exact private destination twice, then the neutral sponsor will submit it. The sponsor pays the pool and network fees."; render();
+      claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault, roleKey: applicationKey, action: "CLAIM" });
+      retainPendingExit({ action: "CLAIM", vaultId: parsed.invitation.vaultId, exitPackage: claimPackage, balanceBefore: balanceBefore.toString() });
+    }
+    notice = retained ? "Reconciling the exact pending private claim. No new note or authorization is being created." : "Exact destination and designated-key authorization verified. Submitting through the neutral sponsor…"; render();
     let result;
     try {
       result = await submitExitPackage(claimPackage);
     } catch (error) {
-      if (error instanceof Error && error.message.includes("needs receipt reconciliation")) claimRetryBlocked = true;
+      if (error instanceof ExitSubmissionError && !error.ambiguous) retainPendingExit(undefined);
       throw error;
     }
+    retainPendingExit(undefined);
     transactionHash = result.transactionHash;
     vault = await readVault(parsed.invitation.vaultId);
     privateBalance = await ready.balance(STRK);

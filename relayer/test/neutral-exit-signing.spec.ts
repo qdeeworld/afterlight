@@ -213,6 +213,34 @@ describe("neutral exact-exit signing boundary", () => {
     );
   });
 
+  it("does not rebroadcast a prepared exit while its owner lease is live", async () => {
+    const validated = validatePreparedExitPackage(preparedClaimPackage(), EXIT_POLICY);
+    const budget = {
+      lookup: vi.fn().mockResolvedValue({
+        outcome: "found",
+        state: "reserved",
+        exactFingerprint: validated.bindingSha256,
+        transactionHash: "0xabc",
+        preparedPayload: "{}",
+      }),
+      takeoverPrepared: vi.fn().mockResolvedValue({ acquired: false }),
+    } as any;
+    const invoke = vi.spyOn(RpcProvider.prototype, "invokeSignedTx");
+    await expect(executePreparedExit("{}", {
+      SUBMIT_ENABLED: "true",
+      EXIT_RPC_URL: "https://rpc.invalid",
+      STARKNET_RPC_AUTH_TOKEN: "configured",
+    } as any, budget, validated)).resolves.toEqual({ status: "duplicate", transactionHash: "0xabc" });
+    expect(budget.takeoverPrepared).toHaveBeenCalledWith(
+      validated.bindingSha256,
+      validated.bindingSha256,
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+      expect.any(Number),
+      120_000,
+    );
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("validates before the kill switch and never signs a fresh disabled exit", async () => {
     await expect(executePreparedExit("{}", { SUBMIT_ENABLED: "false" } as any, {} as any)).rejects.toMatchObject({ code: "invalid_exit" });
   });

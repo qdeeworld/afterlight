@@ -63,7 +63,7 @@ export default {
 
       let plan: RelayPlan;
       let estimateOnly = false;
-      let beforeFreshExecution: (() => Promise<void>) | undefined;
+      let beforeExecutionAdmission: ((ignoredActiveFingerprint?: string) => Promise<void>) | undefined;
       if (url.pathname === EXIT_PATH) {
         requireExitHeaders(request, env);
         await rateLimitExitIngress(env);
@@ -81,9 +81,14 @@ export default {
         await rateLimitCheckpoint(env);
         plan = await prepareCheckpointPlan(env, Date.now(), admissionToken);
         if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
-          beforeFreshExecution = async () => {
+          beforeExecutionAdmission = async (ignoredActiveFingerprint) => {
             const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-            requireFundingAdmission(await readClaimCapacity(env, budget, admissionToken));
+            requireFundingAdmission(await readClaimCapacity(
+              env,
+              budget,
+              admissionToken,
+              ignoredActiveFingerprint,
+            ));
             const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
             if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
             const admission = await budget.acquireFundingAdmission(
@@ -152,7 +157,7 @@ export default {
           createStarknetRelayAdapter(env),
           budget,
           nowMs,
-          beforeFreshExecution,
+          beforeExecutionAdmission,
         );
         return jsonResponse(
           { status: "relayed", result },

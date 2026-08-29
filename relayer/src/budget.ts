@@ -608,10 +608,16 @@ export class RelayBudget extends DurableObject<Env> {
     };
   }
 
-  activeSnapshot(): ActiveBudgetSnapshot {
+  activeSnapshot(ignoredExactFingerprint?: string): ActiveBudgetSnapshot {
+    const ignored = ignoredExactFingerprint === undefined
+      ? undefined
+      : validKey(ignoredExactFingerprint);
     const counts = this.ctx.storage.sql
       .exec<{ status: string; count: number }>(
-        "SELECT status, COUNT(*) AS count FROM reservations WHERE status IN ('RESERVED', 'SUBMITTED') GROUP BY status",
+        ignored === undefined
+          ? "SELECT status, COUNT(*) AS count FROM reservations WHERE status IN ('RESERVED', 'SUBMITTED') GROUP BY status"
+          : "SELECT status, COUNT(*) AS count FROM reservations WHERE status IN ('RESERVED', 'SUBMITTED') AND exact_fingerprint != ? GROUP BY status",
+        ...(ignored === undefined ? [] : [ignored]),
       )
       .toArray();
     const count = (status: "RESERVED" | "SUBMITTED"): number =>

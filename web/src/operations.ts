@@ -71,7 +71,22 @@ function base(vaultId: string, signerKey: string, state: string, epoch: string, 
   };
 }
 
-let pendingCheckpointAdmissionToken: string | undefined;
+const CHECKPOINT_ADMISSION_STORAGE_KEY = "afterlight:checkpoint-admission:v1";
+
+let pendingCheckpointAdmissionToken = (() => {
+  const stored = sessionStorage.getItem(CHECKPOINT_ADMISSION_STORAGE_KEY) ?? "";
+  return /^[0-9a-f]{64}$/.test(stored) ? stored : undefined;
+})();
+
+function retainCheckpointAdmissionToken(token: string | undefined): void {
+  pendingCheckpointAdmissionToken = token;
+  if (token === undefined) sessionStorage.removeItem(CHECKPOINT_ADMISSION_STORAGE_KEY);
+  else sessionStorage.setItem(CHECKPOINT_ADMISSION_STORAGE_KEY, token);
+}
+
+export function hasPendingCheckpointReconciliation(): boolean {
+  return pendingCheckpointAdmissionToken !== undefined;
+}
 
 const AMBIGUOUS_CHECKPOINT_CODES = new Set([
   "internal_error",
@@ -83,7 +98,7 @@ const AMBIGUOUS_CHECKPOINT_CODES = new Set([
 
 async function checkpoint(): Promise<string> {
   const admissionToken = pendingCheckpointAdmissionToken ?? randomHex(32);
-  pendingCheckpointAdmissionToken = admissionToken;
+  retainCheckpointAdmissionToken(admissionToken);
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetch(`${RELAYER_URL}/v1/checkpoint`, {
@@ -109,11 +124,11 @@ async function checkpoint(): Promise<string> {
       }
       const transactionHash = num.toHex(BigInt(body.result.transactionHash));
       await waitForSuccess(transactionHash);
-      pendingCheckpointAdmissionToken = undefined;
+      retainCheckpointAdmissionToken(undefined);
       return transactionHash;
     } catch (error) {
       if (error instanceof Error && error.message === "checkpoint_rejected") {
-        pendingCheckpointAdmissionToken = undefined;
+        retainCheckpointAdmissionToken(undefined);
         throw new Error("The neutral funding checkpoint was rejected. No private funds moved.", { cause: error });
       }
       if (attempt === 0) continue;
@@ -356,10 +371,23 @@ export async function submitExitPackage(
           : body.code === "exit_uncertain"
             ? "The private exit needs receipt reconciliation. Do not retry yet."
             : "The exact-note private exit was rejected. No settlement was submitted.";
-    throw new Error(reason);
+    throw new ExitSubmissionError(reason, body.code, ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""));
   }
+  const transactionHash = num.toHex(BigInt(body.result.transactionHash));
+  await waitForSuccess(transactionHash);
   return {
-    transactionHash: num.toHex(BigInt(body.result.transactionHash)),
+    transactionHash,
     actualFeeFri: body.result.actualFeeFri,
   };
+}
+
+export class ExitSubmissionError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | undefined,
+    readonly ambiguous: boolean,
+  ) {
+    super(message);
+    this.name = "ExitSubmissionError";
+  }
 }

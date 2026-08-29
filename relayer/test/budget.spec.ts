@@ -223,6 +223,15 @@ describe("deployment-wide sponsorship coordinator", () => {
       reservedCount: 0,
       submittedCount: 1,
     });
+    expect(await budget.activeSnapshot(exact)).toMatchObject({
+      reservedCount: 0,
+      submittedCount: 0,
+      sponsorshipFrozen: false,
+    });
+    expect(await budget.activeSnapshot(alternateExact)).toMatchObject({
+      reservedCount: 0,
+      submittedCount: 1,
+    });
   });
 
   it("allows only an expired hashless owner lease to be taken over", async () => {

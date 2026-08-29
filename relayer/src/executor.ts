@@ -123,7 +123,7 @@ export interface BudgetCoordinator {
     nowMs: number,
   ): Promise<BudgetMutationResult>;
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
-  activeSnapshot(): Promise<ActiveBudgetSnapshot>;
+  activeSnapshot(ignoredExactFingerprint?: string): Promise<ActiveBudgetSnapshot>;
   acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
   fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): Promise<FundingAdmissionResult>;
   consumeFundingAdmission(nowMs: number): Promise<FundingAdmissionResult>;
@@ -181,7 +181,7 @@ export async function executeRelayPlan(
   adapter: StarknetRelayAdapter,
   budget: BudgetCoordinator,
   nowMs: number,
-  beforeFreshExecution?: () => Promise<void>,
+  beforeExecutionAdmission?: (ignoredActiveFingerprint?: string) => Promise<void>,
 ): Promise<ExecutionResult> {
   if (!policy.submitEnabled) throw new ExecutorError("submission_disabled");
   const dayKey = utcDayKey(nowMs);
@@ -293,7 +293,9 @@ export async function executeRelayPlan(
 
   // Admission checks that would reject an already-submitted retry belong only
   // on the fresh path, after both semantic and fingerprint reconciliation.
-  if (adoptedMaxFeeFri === null) await beforeFreshExecution?.();
+  await beforeExecutionAdmission?.(
+    adoptedMaxFeeFri === null ? undefined : plan.fingerprint,
+  );
 
   const simulation = await adapter.simulateExact(plan);
   if (!simulation.ok) throw new ExecutorError("simulation_failed");

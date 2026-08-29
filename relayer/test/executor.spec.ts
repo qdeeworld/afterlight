@@ -187,14 +187,14 @@ describe("fail-closed exact-call executor", () => {
       state: "reserved",
       transactionHash: null,
     });
-    const beforeFreshExecution = vi.fn(async () => {
-      throw new Error("an adopted reservation must not reacquire funding admission");
+    const beforeExecutionAdmission = vi.fn(async (ignoredActiveFingerprint?: string) => {
+      expect(ignoredActiveFingerprint).toBe(plan.fingerprint);
     });
-    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001, beforeFreshExecution)).resolves.toMatchObject({
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001, beforeExecutionAdmission)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
     });
-    expect(beforeFreshExecution).not.toHaveBeenCalled();
+    expect(beforeExecutionAdmission).toHaveBeenCalledOnce();
     expect(adapter.signAndSubmitExact).toHaveBeenCalledOnce();
   });
 

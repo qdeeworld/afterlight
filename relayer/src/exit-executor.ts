@@ -85,6 +85,7 @@ export async function readClaimCapacity(
   env: Env,
   budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot" | "fundingAdmissionSnapshot" | "consumeFundingAdmission">,
   admissionOwner?: string,
+  ignoredActiveFingerprint?: string,
 ): Promise<ClaimCapacity> {
   try {
     const provider = new RpcProvider({
@@ -140,7 +141,7 @@ export async function readClaimCapacity(
       : budget.fundingAdmissionSnapshot(Date.now(), admissionOwner);
     const [exitLedger, activeLedger, fundingAdmission] = await Promise.all([
       budget.snapshot(dayKey, "exit"),
-      budget.activeSnapshot(),
+      budget.activeSnapshot(ignoredActiveFingerprint),
       fundingSnapshot,
     ]);
     return applyLedgerCapacity(chainCapacity, {
@@ -233,7 +234,19 @@ export async function executePreparedExit(
       prior.preparedPayload !== null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
-      if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
+      if (env.SUBMIT_ENABLED !== "true") {
+        return { status: "duplicate", transactionHash: prior.transactionHash };
+      }
+      const takeover = await budget.takeoverPrepared(
+        semanticKey,
+        validated.bindingSha256,
+        ownerToken,
+        Date.now(),
+        120_000,
+      );
+      if (!takeover.acquired) {
+        return { status: "duplicate", transactionHash: prior.transactionHash };
+      }
       return rebroadcastPreparedExit(
         provider,
         budget,
