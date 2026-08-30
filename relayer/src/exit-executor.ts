@@ -276,13 +276,29 @@ export async function readFundingCheckpointPosition(
   if (!("block_number" in receipt) || !Number.isSafeInteger(receipt.block_number)) {
     throw new Error("checkpoint_block_unavailable");
   }
-  const block = await provider.getBlockWithTxHashes(receipt.block_number);
+  const [block, latest] = await Promise.all([
+    provider.getBlockWithTxHashes(receipt.block_number),
+    provider.getBlockWithTxHashes("latest"),
+  ]);
+  assertFundingCheckpointFresh(block.timestamp, latest.timestamp);
   const normalizedHash = BigInt(transactionHash).toString();
   const transactionIndex = block.transactions.findIndex((candidate) =>
     BigInt(candidate).toString() === normalizedHash
   );
   if (transactionIndex < 0) throw new Error("checkpoint_transaction_missing");
   return { blockNumber: receipt.block_number, transactionIndex };
+}
+
+export function assertFundingCheckpointFresh(checkpointTimestamp: number, latestTimestamp: number): void {
+  if (
+    !Number.isSafeInteger(checkpointTimestamp) ||
+    !Number.isSafeInteger(latestTimestamp) ||
+    checkpointTimestamp < 0 ||
+    latestTimestamp < checkpointTimestamp ||
+    BigInt(latestTimestamp - checkpointTimestamp) > FUNDING_CHECKPOINT_MAX_AGE_SECONDS
+  ) {
+    throw new Error("checkpoint_expired");
+  }
 }
 
 export function validatePreparedExitPayload(payload: string): ValidatedExit {

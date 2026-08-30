@@ -100,7 +100,7 @@ export default {
             );
             requireFundingAdmission(capacity);
             const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
-            if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+            if (ttlMs !== 300_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
               Number(ttlMs),
@@ -176,7 +176,15 @@ export default {
           if (!checkpointSucceeded || result.transactionHash === null) {
             throw new RelayHttpError(503, "funding_unavailable");
           }
-          const checkpoint = await readFundingCheckpointPosition(env, result.transactionHash);
+          let checkpoint;
+          try {
+            checkpoint = await readFundingCheckpointPosition(env, result.transactionHash);
+          } catch (error) {
+            if (error instanceof Error && error.message === "checkpoint_expired") {
+              throw new RelayHttpError(503, "funding_unavailable");
+            }
+            throw error;
+          }
           const bound = await budget.bindFundingAdmissionCheckpoint(
             Date.now(),
             checkpointAdmissionToken,

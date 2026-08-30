@@ -16,13 +16,19 @@ import {
   validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, applyLedgerCapacity, assessChainCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit, serializeSignedExitForStorage, validateStoredSignedExit } from "../src/exit-executor.js";
+import { EXIT_POLICY, applyLedgerCapacity, assertFundingCheckpointFresh, assessChainCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit, serializeSignedExitForStorage, validateStoredSignedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
 const TEST_SIGNER = "0x12345";
 
 describe("neutral exact-exit signing boundary", () => {
+  it("rejects a checkpoint once its exact onchain lifetime has elapsed", () => {
+    expect(() => assertFundingCheckpointFresh(1_000, 1_300)).not.toThrow();
+    expect(() => assertFundingCheckpointFresh(1_000, 1_301)).toThrow(/checkpoint_expired/);
+    expect(() => assertFundingCheckpointFresh(1_001, 1_000)).toThrow(/checkpoint_expired/);
+  });
+
   it("distinguishes definitive RPC rejection from ambiguous transport failure", () => {
     expect(classifyBroadcastFailure({ baseError: { code: 55 } })).toEqual({
       category: "rpc_validation",
