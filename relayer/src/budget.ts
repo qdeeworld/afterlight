@@ -194,10 +194,11 @@ export class RelayBudget extends DurableObject<Env> {
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         expires_at_ms INTEGER,
         owner_token TEXT,
-        checkpoint_marker TEXT
+        checkpoint_marker TEXT,
+        checkpoint_block INTEGER,
+        checkpoint_tx_index INTEGER,
+        checkpoint_tx_hash TEXT
       );
-      INSERT OR IGNORE INTO funding_admission (singleton, expires_at_ms, owner_token, checkpoint_marker)
-      VALUES (1, NULL, NULL, NULL);
     `);
     const reservationColumns = this.ctx.storage.sql
       .exec<{ name: string }>("PRAGMA table_info(reservations)")
@@ -224,6 +225,18 @@ export class RelayBudget extends DurableObject<Env> {
     if (!fundingColumns.some(({ name }) => name === "checkpoint_marker")) {
       this.ctx.storage.sql.exec("ALTER TABLE funding_admission ADD COLUMN checkpoint_marker TEXT");
     }
+    if (!fundingColumns.some(({ name }) => name === "checkpoint_block")) {
+      this.ctx.storage.sql.exec("ALTER TABLE funding_admission ADD COLUMN checkpoint_block INTEGER");
+    }
+    if (!fundingColumns.some(({ name }) => name === "checkpoint_tx_hash")) {
+      this.ctx.storage.sql.exec("ALTER TABLE funding_admission ADD COLUMN checkpoint_tx_hash TEXT");
+    }
+    if (!fundingColumns.some(({ name }) => name === "checkpoint_tx_index")) {
+      this.ctx.storage.sql.exec("ALTER TABLE funding_admission ADD COLUMN checkpoint_tx_index INTEGER");
+    }
+    this.ctx.storage.sql.exec(
+      "INSERT OR IGNORE INTO funding_admission (singleton, expires_at_ms) VALUES (1, NULL)",
+    );
     // The legacy ledger did not identify whether a reservation paid for a
     // control or exit transaction. Preserve its aggregate against both class
     // ceilings until UTC rollover. Double-counting across independent class
@@ -649,7 +662,7 @@ export class RelayBudget extends DurableObject<Env> {
       }
       const expiresAtMs = now + ttlMs;
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET expires_at_ms = ?, owner_token = ?, checkpoint_marker = NULL WHERE singleton = 1",
+        "UPDATE funding_admission SET expires_at_ms = ?, owner_token = ?, checkpoint_marker = NULL, checkpoint_block = NULL, checkpoint_tx_index = NULL, checkpoint_tx_hash = NULL WHERE singleton = 1",
         expiresAtMs,
         owner,
       );
@@ -657,19 +670,45 @@ export class RelayBudget extends DurableObject<Env> {
     });
   }
 
-  bindFundingAdmissionCheckpoint(nowMs: number, ownerToken: string, checkpointMarker: string): FundingAdmissionResult {
+  bindFundingAdmissionCheckpoint(
+    nowMs: number,
+    ownerToken: string,
+    checkpointBlock: number,
+    checkpointTransactionIndex: number,
+    checkpointTransactionHash: string,
+  ): FundingAdmissionResult {
     const now = validTimestamp(nowMs);
     const owner = validKey(ownerToken);
-    const marker = decimal(checkpointMarker).toString();
+    if (!Number.isSafeInteger(checkpointBlock) || checkpointBlock < 0) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    if (!Number.isSafeInteger(checkpointTransactionIndex) || checkpointTransactionIndex < 0) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    const transactionHash = BigInt(validTransactionHash(checkpointTransactionHash)).toString();
     return this.ctx.storage.transactionSync(() => {
       const current = this.fundingAdmissionState();
       const active = current.expiresAtMs !== null && current.expiresAtMs > now;
       if (!active || current.ownerToken !== owner) {
         return { acquired: false, active, expiresAtMs: active ? current.expiresAtMs : null };
       }
+      if (current.checkpointBlock !== null && current.checkpointTransactionIndex !== null) {
+        const incomingIsOlder = checkpointBlock < current.checkpointBlock ||
+          (checkpointBlock === current.checkpointBlock && checkpointTransactionIndex < current.checkpointTransactionIndex);
+        if (incomingIsOlder) {
+          return { acquired: true, active: true, expiresAtMs: current.expiresAtMs };
+        }
+        const samePosition = checkpointBlock === current.checkpointBlock &&
+          checkpointTransactionIndex === current.checkpointTransactionIndex;
+        if (samePosition && current.checkpointTransactionHash !== transactionHash) {
+          throw new BudgetError("idempotency_conflict");
+        }
+      }
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET checkpoint_marker = ? WHERE singleton = 1",
-        marker,
+        "UPDATE funding_admission SET checkpoint_marker = NULL, checkpoint_block = ?, checkpoint_tx_index = ?, checkpoint_tx_hash = ? WHERE singleton = 1",
+        checkpointBlock,
+        checkpointTransactionIndex,
+        transactionHash,
       );
       return { acquired: true, active: true, expiresAtMs: current.expiresAtMs };
     });
@@ -687,16 +726,42 @@ export class RelayBudget extends DurableObject<Env> {
     return { acquired: false, active, expiresAtMs: active ? expiresAtMs : null };
   }
 
-  consumeFundingAdmission(nowMs: number, observedCheckpointMarker: string): FundingAdmissionResult {
+  fundingAdmissionCheckpoint(nowMs: number): { blockNumber: number; transactionIndex: number; transactionHash: string } | null {
     const now = validTimestamp(nowMs);
-    const observed = decimal(observedCheckpointMarker, true).toString();
+    const current = this.fundingAdmissionState();
+    return current.expiresAtMs !== null && current.expiresAtMs > now && current.checkpointBlock !== null && current.checkpointTransactionIndex !== null && current.checkpointTransactionHash !== null
+      ? { blockNumber: current.checkpointBlock, transactionIndex: current.checkpointTransactionIndex, transactionHash: current.checkpointTransactionHash }
+      : null;
+  }
+
+  consumeFundingAdmission(
+    nowMs: number,
+    observedCheckpointBlock: number,
+    observedCheckpointTransactionIndex: number,
+    observedCheckpointTransactionHash: string,
+    fundedSinceCheckpoint: boolean,
+  ): FundingAdmissionResult {
+    const now = validTimestamp(nowMs);
+    if (!Number.isSafeInteger(observedCheckpointBlock) || observedCheckpointBlock < 0) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    if (!Number.isSafeInteger(observedCheckpointTransactionIndex) || observedCheckpointTransactionIndex < 0) {
+      throw new BudgetError("invalid_budget_input");
+    }
+    const observedTransactionHash = BigInt(validTransactionHash(observedCheckpointTransactionHash)).toString();
     return this.ctx.storage.transactionSync(() => {
       const current = this.fundingAdmissionState();
       const active = current.expiresAtMs !== null && current.expiresAtMs > now;
-      // The permissionless checkpoint may be refreshed by anyone, so a
-      // different nonzero marker is not proof of FUND. Only the contract's
-      // successful FUND path resets the bound one-shot marker to zero.
-      if (!active || current.checkpointMarker === null || observed !== "0") {
+      // VaultFunded is immutable evidence that the globally admitted
+      // checkpoint was consumed. Unlike the mutable checkpoint storage slot,
+      // a later permissionless refresh cannot overwrite this signal.
+      if (
+        !active ||
+        current.checkpointBlock !== observedCheckpointBlock ||
+        current.checkpointTransactionIndex !== observedCheckpointTransactionIndex ||
+        current.checkpointTransactionHash !== observedTransactionHash ||
+        !fundedSinceCheckpoint
+      ) {
         return {
           acquired: false,
           active,
@@ -704,22 +769,24 @@ export class RelayBudget extends DurableObject<Env> {
         };
       }
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET expires_at_ms = NULL, owner_token = NULL, checkpoint_marker = NULL WHERE singleton = 1",
+        "UPDATE funding_admission SET expires_at_ms = NULL, owner_token = NULL, checkpoint_marker = NULL, checkpoint_block = NULL, checkpoint_tx_index = NULL, checkpoint_tx_hash = NULL WHERE singleton = 1",
       );
       return { acquired: false, active: false, expiresAtMs: current.expiresAtMs };
     });
   }
 
-  private fundingAdmissionState(): { expiresAtMs: number | null; ownerToken: string | null; checkpointMarker: string | null } {
+  private fundingAdmissionState(): { expiresAtMs: number | null; ownerToken: string | null; checkpointBlock: number | null; checkpointTransactionIndex: number | null; checkpointTransactionHash: string | null } {
     const row = this.ctx.storage.sql
-      .exec<{ expires_at_ms: number | null; owner_token: string | null; checkpoint_marker: string | null }>(
-        "SELECT expires_at_ms, owner_token, checkpoint_marker FROM funding_admission WHERE singleton = 1",
+      .exec<{ expires_at_ms: number | null; owner_token: string | null; checkpoint_marker: string | null; checkpoint_block: number | null; checkpoint_tx_index: number | null; checkpoint_tx_hash: string | null }>(
+        "SELECT expires_at_ms, owner_token, checkpoint_marker, checkpoint_block, checkpoint_tx_index, checkpoint_tx_hash FROM funding_admission WHERE singleton = 1",
       )
       .one();
     return {
       expiresAtMs: row.expires_at_ms,
       ownerToken: row.owner_token,
-      checkpointMarker: row.checkpoint_marker,
+      checkpointBlock: row.checkpoint_block,
+      checkpointTransactionIndex: row.checkpoint_tx_index,
+      checkpointTransactionHash: row.checkpoint_tx_hash,
     };
   }
 

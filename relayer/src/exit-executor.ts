@@ -63,7 +63,7 @@ const TOKEN = EXIT_POLICY.tokenAddress;
 const AFTERLIGHT = EXIT_POLICY.afterlightAddress;
 const NEUTRAL = EXIT_POLICY.neutralAddress;
 const FUNDING_CHECKPOINT_MAX_AGE_SECONDS = 300n;
-const FUNDING_CHECKPOINT_AT_STORAGE_KEY = `0x${hash.starknetKeccak("funding_checkpoint_at").toString(16)}`;
+const VAULT_FUNDED_SELECTOR = `0x${hash.starknetKeccak("VaultFunded").toString(16)}`;
 
 export class ExitExecutorError extends Error {
   constructor(readonly code: "invalid_exit" | "exit_unavailable" | "exit_busy" | "exit_uncertain" | "exit_reverted") {
@@ -88,7 +88,7 @@ export type ClaimCapacity = Readonly<{
 
 export async function readClaimCapacity(
   env: Env,
-  budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot" | "fundingAdmissionSnapshot" | "consumeFundingAdmission">,
+  budget?: Pick<BudgetCoordinator, "snapshot" | "activeSnapshot" | "fundingAdmissionSnapshot" | "fundingAdmissionCheckpoint" | "consumeFundingAdmission">,
   admissionOwner?: string,
   ignoredActiveFingerprint?: string,
 ): Promise<ClaimCapacity> {
@@ -103,7 +103,7 @@ export async function readClaimCapacity(
     const block = latest.block_number;
     const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) =>
       provider.callContract({ contractAddress, entrypoint, calldata }, block);
-    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw, configRaw, checkpointMarkerRaw] = await Promise.all([
+    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw, configRaw] = await Promise.all([
       provider.getClassHashAt(POOL, block),
       provider.getClassHashAt(NEUTRAL, block),
       provider.getClassHashAt(AFTERLIGHT, block),
@@ -113,7 +113,6 @@ export async function readClaimCapacity(
       call(POOL, "get_fee_amount"),
       call(POOL, "get_fee_collector"),
       call(AFTERLIGHT, "get_config"),
-      provider.getStorageAt(AFTERLIGHT, FUNDING_CHECKPOINT_AT_STORAGE_KEY, block),
     ]);
     if (
       normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH) ||
@@ -129,10 +128,54 @@ export async function readClaimCapacity(
     const balance = parseU256Result(balanceRaw, "balance");
     const liability = parseU256Result(liabilityRaw, "liability");
     if (budget !== undefined) {
-      // A successful FUND resets the contract's one-shot checkpoint marker.
-      // Comparing that marker avoids both pre-existing-liability false clears
-      // and net-liability races with concurrent private exits.
-      await budget.consumeFundingAdmission(Date.now(), BigInt(storageValue(checkpointMarkerRaw)).toString());
+      const checkpoint = await budget.fundingAdmissionCheckpoint(Date.now());
+      let fundedSinceCheckpoint = false;
+      if (checkpoint !== null) {
+        const fundedEvents = await provider.getEvents({
+          from_block: { block_number: checkpoint.blockNumber },
+          to_block: { block_number: block },
+          address: AFTERLIGHT,
+          keys: [[VAULT_FUNDED_SELECTOR]],
+          chunk_size: 100,
+        });
+        if (fundedEvents.continuation_token === undefined || fundedEvents.continuation_token === null) {
+          const eventPositions = fundedEvents.events.flatMap((event) => {
+            if (!("block_number" in event) || typeof event.block_number !== "number") return [];
+            return [{
+              blockNumber: event.block_number,
+              transactionHash: BigInt(event.transaction_hash).toString(),
+            }];
+          });
+          if (eventPositions.length > 0) {
+            // Confirm the stored cursor is still canonical before allowing any
+            // later event to consume it. This also gives exact same-block
+            // ordering when checkpoint and FUND land together.
+            const checkpointBlock = await provider.getBlockWithTxHashes(checkpoint.blockNumber);
+            const transactionOrder = checkpointBlock.transactions.map((transactionHash, index) =>
+              [BigInt(transactionHash).toString(), index] as const
+            );
+            const checkpointAtIndex = transactionOrder[checkpoint.transactionIndex]?.[0];
+            if (checkpointAtIndex !== checkpoint.transactionHash) throw new Error("checkpoint_transaction_missing");
+            fundedSinceCheckpoint = eventPositions.some((event) => {
+              if (event.blockNumber > checkpoint.blockNumber) return true;
+              if (event.blockNumber < checkpoint.blockNumber) return false;
+              const eventIndex = transactionOrder.find(([transactionHash]) =>
+                transactionHash === event.transactionHash
+              )?.[1];
+              return eventIndex !== undefined && eventIndex > checkpoint.transactionIndex;
+            });
+          }
+        }
+      }
+      if (checkpoint !== null) {
+        await budget.consumeFundingAdmission(
+          Date.now(),
+          checkpoint.blockNumber,
+          checkpoint.transactionIndex,
+          `0x${BigInt(checkpoint.transactionHash).toString(16)}`,
+          fundedSinceCheckpoint,
+        );
+      }
     }
     const configuredVaultLimit = parseBoundedVaultLimit(env.MAX_OUTSTANDING_VAULTS);
     const configuredDailyBudget = parseConfiguredDailyExitBudget(env.DAILY_EXIT_BUDGET_FRI);
@@ -220,18 +263,26 @@ function exhaustedCapacity(reason: "allowance" | "balance"): ClaimCapacity {
   return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
 }
 
-export async function readFundingCheckpointMarker(env: Env): Promise<string> {
+export async function readFundingCheckpointPosition(
+  env: Env,
+  transactionHash: string,
+): Promise<{ blockNumber: number; transactionIndex: number }> {
   const provider = new RpcProvider({
     nodeUrl: env.EXIT_RPC_URL,
     headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
     plugins: false,
   });
-  const marker = await provider.getStorageAt(AFTERLIGHT, FUNDING_CHECKPOINT_AT_STORAGE_KEY, "latest");
-  return BigInt(storageValue(marker)).toString();
-}
-
-function storageValue(value: string | Readonly<{ value: string }>): string {
-  return typeof value === "string" ? value : value.value;
+  const receipt = await provider.getTransactionReceipt(transactionHash);
+  if (!("block_number" in receipt) || !Number.isSafeInteger(receipt.block_number)) {
+    throw new Error("checkpoint_block_unavailable");
+  }
+  const block = await provider.getBlockWithTxHashes(receipt.block_number);
+  const normalizedHash = BigInt(transactionHash).toString();
+  const transactionIndex = block.transactions.findIndex((candidate) =>
+    BigInt(candidate).toString() === normalizedHash
+  );
+  if (transactionIndex < 0) throw new Error("checkpoint_transaction_missing");
+  return { blockNumber: receipt.block_number, transactionIndex };
 }
 
 export function validatePreparedExitPayload(payload: string): ValidatedExit {

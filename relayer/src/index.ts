@@ -28,7 +28,7 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedExit, ExitExecutorError, readClaimCapacity, readFundingCheckpointMarker, validatePreparedExitPayload } from "./exit-executor.js";
+import { executePreparedExit, ExitExecutorError, readClaimCapacity, readFundingCheckpointPosition, validatePreparedExitPayload } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
 
@@ -169,11 +169,21 @@ export default {
           nowMs,
           beforeExecutionAdmission,
         );
-        if (url.pathname === CHECKPOINT_PATH && result.transactionHash !== null) {
+        if (url.pathname === CHECKPOINT_PATH) {
           if (checkpointAdmissionToken === undefined) throw new RelayHttpError(503, "funding_unavailable");
-          const marker = await readFundingCheckpointMarker(env);
-          if (marker === "0") throw new RelayHttpError(503, "funding_unavailable");
-          const bound = await budget.bindFundingAdmissionCheckpoint(Date.now(), checkpointAdmissionToken, marker);
+          const checkpointSucceeded = result.status === "accepted" ||
+            (result.status === "duplicate" && result.state === "committed");
+          if (!checkpointSucceeded || result.transactionHash === null) {
+            throw new RelayHttpError(503, "funding_unavailable");
+          }
+          const checkpoint = await readFundingCheckpointPosition(env, result.transactionHash);
+          const bound = await budget.bindFundingAdmissionCheckpoint(
+            Date.now(),
+            checkpointAdmissionToken,
+            checkpoint.blockNumber,
+            checkpoint.transactionIndex,
+            result.transactionHash,
+          );
           if (!bound.acquired) throw new RelayHttpError(503, "funding_unavailable");
         }
         return jsonResponse(
