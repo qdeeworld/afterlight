@@ -145,10 +145,13 @@ describe("Afterlight Phase A relay Worker", () => {
     const fixedTime = 1_787_999_999_000;
     const first = await prepareCheckpointPlan(env, fixedTime, admissionToken);
     const sameOwnerRetry = await prepareCheckpointPlan(env, fixedTime, admissionToken);
+    const delayedSameOwnerRetry = await prepareCheckpointPlan(env, fixedTime + 300_000, admissionToken);
     const otherOwner = await prepareCheckpointPlan(env, fixedTime, "b".repeat(64));
 
     expect(sameOwnerRetry.fingerprint).toBe(first.fingerprint);
     expect(sameOwnerRetry.semanticKey).toBe(first.semanticKey);
+    expect(delayedSameOwnerRetry.fingerprint).toBe(first.fingerprint);
+    expect(delayedSameOwnerRetry.semanticKey).toBe(first.semanticKey);
     expect(otherOwner.fingerprint).not.toBe(first.fingerprint);
     expect(otherOwner.semanticKey).not.toBe(first.semanticKey);
     expect(otherOwner.call).toEqual(first.call);

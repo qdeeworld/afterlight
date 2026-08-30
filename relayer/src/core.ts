@@ -93,7 +93,6 @@ export async function prepareCheckpointPlan(env: Env, nowMs: number, admissionTo
       contract: call.contractAddress,
       operation: "afterlight-checkpoint/1",
       admissionToken,
-      bucket: Math.floor(nowMs / 15_000),
     }),
   );
   return Object.freeze({
