@@ -28,7 +28,7 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedClaim, ExitExecutorError } from "./exit-executor.js";
+import { executePreparedExit, ExitExecutorError, readClaimCapacity, readFundingCheckpointPosition, validatePreparedExitPayload } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
 
@@ -41,7 +41,7 @@ export default {
     const requestOrigin = request.headers.get("origin") ?? "";
     try {
       if (request.method === "GET" && url.pathname === HEALTH_PATH) {
-        return health(env);
+        return health(request, env);
       }
       if (request.method === "OPTIONS" && url.pathname === RELAY_PATH) {
         return preflight(request, env);
@@ -63,17 +63,51 @@ export default {
 
       let plan: RelayPlan;
       let estimateOnly = false;
+      let checkpointAdmissionToken: string | undefined;
+      let beforeExecutionAdmission: ((ignoredActiveFingerprint?: string) => Promise<void>) | undefined;
       if (url.pathname === EXIT_PATH) {
+        const exitMode = url.searchParams.get("mode");
+        if (
+          (exitMode !== null && exitMode !== "prepare" && exitMode !== "reconcile") ||
+          url.searchParams.size !== (exitMode === null ? 0 : 1)
+        ) {
+          throw new RelayHttpError(400, "invalid_query");
+        }
         requireExitHeaders(request, env);
-        await rateLimitExit(env);
+        await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
+        const validated = validatePreparedExitPayload(payload);
+        const readiness = executorReadiness(env);
+        if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-        const result = await executePreparedClaim(payload, env, budget);
+        const result = await executePreparedExit(payload, env, budget, validated, async () => {
+          await rateLimitValidatedExit(env, await exitRateLimitIdentity(validated.action, validated.metadata.vaultId));
+        }, exitMode === "prepare" ? "return_signed" : exitMode === "reconcile" ? "reconcile_only" : "broadcast");
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
-        await requireCheckpointHeaders(request, env);
+        const admissionToken = await requireCheckpointHeaders(request, env);
+        checkpointAdmissionToken = admissionToken;
         await rateLimitCheckpoint(env);
-        plan = await prepareCheckpointPlan(env, Date.now());
+        plan = await prepareCheckpointPlan(env, Date.now(), admissionToken);
+        if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
+          beforeExecutionAdmission = async (ignoredActiveFingerprint) => {
+            const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
+            const capacity = await readClaimCapacity(
+              env,
+              budget,
+              admissionToken,
+              ignoredActiveFingerprint,
+            );
+            requireFundingAdmission(capacity);
+            const ttlMs = fundingAdmissionTtlMs(env);
+            const admission = await budget.acquireFundingAdmission(
+              Date.now(),
+              ttlMs,
+              admissionToken,
+            );
+            if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
+          };
+        }
       } else {
         requireRelayHeaders(request, env);
         estimateOnly = url.searchParams.get("mode") === "estimate";
@@ -132,7 +166,34 @@ export default {
           createStarknetRelayAdapter(env),
           budget,
           nowMs,
+          beforeExecutionAdmission,
         );
+        if (url.pathname === CHECKPOINT_PATH) {
+          if (checkpointAdmissionToken === undefined) throw new RelayHttpError(503, "funding_unavailable");
+          const checkpointSucceeded = result.status === "accepted" ||
+            (result.status === "duplicate" && result.state === "committed");
+          if (!checkpointSucceeded || result.transactionHash === null) {
+            throw new RelayHttpError(503, "funding_unavailable");
+          }
+          let checkpoint;
+          try {
+            checkpoint = await readFundingCheckpointPosition(env, result.transactionHash);
+          } catch (error) {
+            if (error instanceof Error && error.message === "checkpoint_expired") {
+              throw new RelayHttpError(503, "funding_unavailable");
+            }
+            throw error;
+          }
+          const bound = await budget.bindFundingAdmissionCheckpoint(
+            Date.now(),
+            fundingAdmissionTtlMs(env),
+            checkpointAdmissionToken,
+            checkpoint.blockNumber,
+            checkpoint.transactionIndex,
+            result.transactionHash,
+          );
+          if (!bound.acquired) throw new RelayHttpError(503, "funding_unavailable");
+        }
         return jsonResponse(
           { status: "relayed", result },
           200,
@@ -155,7 +216,14 @@ export default {
         error instanceof RelayHttpError
           ? error
           : error instanceof ExitExecutorError
-            ? new RelayHttpError(error.code === "invalid_exit" ? 422 : error.code === "exit_busy" ? 503 : 502, error.code)
+            ? new RelayHttpError(
+                error.code === "invalid_exit"
+                  ? 422
+                  : error.code === "exit_busy" || error.code === "exit_unavailable"
+                    ? 503
+                    : 502,
+                error.code,
+              )
           : executorCode !== undefined
             ? new RelayHttpError(executorCode === "relayer_busy" ? 503 : 502, executorCode)
           : new RelayHttpError(500, "internal_error");
@@ -195,18 +263,23 @@ function executorErrorCode(error: unknown): ExecutorError["code"] | undefined {
     : undefined;
 }
 
-async function health(env: Env): Promise<Response> {
+async function health(request: Request, env: Env): Promise<Response> {
   const submitDisabled = !isSubmissionEnabled(env.SUBMIT_ENABLED);
   const readiness = executorReadiness(env);
-  const balance =
+  const [balance, claimCapacity] = await Promise.all([
     submitDisabled || !readiness.executable
       ? assessBalanceHealth(undefined, env.MIN_RELAYER_BALANCE_FRI, !submitDisabled)
       : await readBalanceHealth(
           createStarknetRelayAdapter(env),
           env.MIN_RELAYER_BALANCE_FRI,
           true,
-        );
+        ),
+    submitDisabled || !readiness.executable
+      ? Promise.resolve({ status: "unknown" as const, reason: "configuration" as const, fundingStatus: "unknown" as const, fundingReason: "configuration" as const })
+      : readClaimCapacity(env, env.RELAY_BUDGET.getByName(budgetObjectName(env))),
+  ]);
   const ready = !submitDisabled && readiness.executable && balance.status === "ok";
+  const origin = request.headers.get("origin");
   return jsonResponse(
     {
       status: submitDisabled ? "ok" : ready ? "ok" : "degraded",
@@ -215,6 +288,7 @@ async function health(env: Env): Promise<Response> {
       submission: submitDisabled ? "disabled" : "enabled",
       executor: readiness,
       balance,
+      claimCapacity,
       privacy: {
         payloadLogging: false,
         appKeysHeld: false,
@@ -222,11 +296,28 @@ async function health(env: Env): Promise<Response> {
       },
     },
     submitDisabled || ready ? 200 : 503,
+    isAllowedOrigin(origin, env.ALLOWED_ORIGIN) ? corsHeaders(origin ?? "") : undefined,
   );
 }
 
 function isSubmissionEnabled(value: string): boolean {
   return value === "true";
+}
+
+function fundingAdmissionTtlMs(env: Env): number {
+  const ttlMs = parsePositiveDecimal(
+    env.FUNDING_ADMISSION_TTL_MS,
+    "funding_admission_ttl",
+    900_000n,
+  );
+  if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+  return Number(ttlMs);
+}
+
+export function requireFundingAdmission(capacity: Awaited<ReturnType<typeof readClaimCapacity>>): void {
+  if (capacity.fundingStatus !== "ready") {
+    throw new RelayHttpError(503, "funding_unavailable");
+  }
 }
 
 function preflight(request: Request, env: Env): Response {
@@ -257,12 +348,23 @@ function requireExitHeaders(request: Request, env: Env): void {
   if (contentType !== "application/json") throw new RelayHttpError(415, "invalid_content_type");
 }
 
-async function rateLimitExit(env: Env): Promise<void> {
-  const [globalOutcome, exitOutcome] = await Promise.all([
-    env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" }),
-    env.EXIT_RATE_LIMITER.limit({ key: "afterlight-claim-exit-global-v1" }),
-  ]);
-  if (!globalOutcome.success || !exitOutcome.success) {
-    throw new RelayHttpError(429, "rate_limited");
-  }
+async function rateLimitExitIngress(env: Env): Promise<void> {
+  const outcome = await env.RELAY_GLOBAL_LIMITER.limit({ key: "afterlight-relay-global-v1" });
+  if (!outcome.success) throw new RelayHttpError(429, "rate_limited");
+}
+
+async function rateLimitValidatedExit(env: Env, bindingSha256: string): Promise<void> {
+  const outcome = await env.EXIT_RATE_LIMITER.limit({ key: bindingSha256 });
+  if (!outcome.success) throw new RelayHttpError(429, "rate_limited");
+}
+
+/** Stable across signatures, proofs, expiries, and destination variants. */
+export async function exitRateLimitIdentity(action: string, vaultId: string): Promise<string> {
+  if (action !== "CLAIM" && action !== "CANCEL_REFUND") throw new RelayHttpError(422, "invalid_exit");
+  const canonicalVault = `0x${BigInt(vaultId).toString(16)}`;
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`afterlight-exit-rate-limit-v1:${action}:${canonicalVault}`),
+  );
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }

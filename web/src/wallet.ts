@@ -1,8 +1,9 @@
 import { createStore } from "@starknet-io/get-starknet-discovery";
-import { WalletAccountV6, walletV6, num, type RpcProvider } from "starknet";
+import { WalletAccountV6, walletV6, num, type Call, type RpcProvider } from "starknet";
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
-import { CHAIN_ID, READY_VERSION } from "./config.ts";
+import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
+import { isCompatibleReadyVersion } from "./compatibility.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -13,6 +14,7 @@ export interface ReadySession {
   chainId: string;
   balance(token: string): Promise<bigint>;
   invoke(actions: readonly STRK20_ACTION[]): Promise<string>;
+  invokePublic(calls: readonly Call[]): Promise<string>;
   prepare(actions: readonly STRK20_ACTION[], simulate: boolean): Promise<PreparedCallAndProof>;
   disconnect(): void;
 }
@@ -40,7 +42,7 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
   if (!wallet) throw new Error("Ready X was not detected in this browser profile.");
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
-  if (feature.walletVersion !== READY_VERSION) throw new Error(`Ready X ${READY_VERSION} is required; detected ${String(feature.walletVersion)}.`);
+  if (!isCompatibleReadyVersion(feature.walletVersion)) throw new Error(`Ready X ${READY_MIN_VERSION} or a compatible Ready 5.x release is required; detected ${String(feature.walletVersion)}.`);
   // This function runs only from the explicit Connect Ready X button. Use the
   // interactive Wallet Standard flow so a profile that has not authorized
   // Afterlight yet can actually approve the connection. Silent mode is only
@@ -66,7 +68,7 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
 
   return {
     name: wallet.name,
-    version: READY_VERSION,
+    version: String(feature.walletVersion),
     address,
     chainId,
     balance: async (token) => {
@@ -87,6 +89,12 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
       await assertFresh();
       const response = await account.strk20InvokeTransaction([...actions] as never);
       if (!response.transaction_hash) throw new Error("Ready did not return a transaction hash.");
+      return num.toHex(BigInt(response.transaction_hash));
+    },
+    invokePublic: async (calls) => {
+      await assertFresh();
+      const response = await account.execute([...calls]);
+      if (!response.transaction_hash) throw new Error("Ready did not return a public transaction hash.");
       return num.toHex(BigInt(response.transaction_hash));
     },
     prepare: async (actions, simulate) => {

@@ -1,6 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Afterlight">
-  <rect width="64" height="64" rx="15" fill="#191915"/>
-  <circle cx="32" cy="32" r="18" fill="#d86f31"/>
-  <circle cx="40" cy="25" r="17" fill="#191915"/>
-  <circle cx="25" cy="43" r="3" fill="#fffdf8"/>
+  <rect width="64" height="64" rx="15" fill="#0d100f"/>
+  <circle cx="32" cy="32" r="22" fill="none" stroke="#465249"/>
+  <circle cx="32" cy="32" r="14" fill="none" stroke="#68472f"/>
+  <circle cx="32" cy="32" r="7" fill="#e69a55"/>
+  <circle cx="32" cy="32" r="4" fill="#ffd0a2"/>
+  <circle cx="48" cy="17" r="2.5" fill="#72c99b"/>
 </svg>

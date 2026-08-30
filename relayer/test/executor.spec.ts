@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RelayPlan } from "../src/core.js";
+import { readActualFeeFri } from "../src/starknet-adapter.js";
 import {
   ExecutorError,
   assessBalanceHealth,
@@ -18,6 +19,7 @@ import {
 
 const nowMs = Date.UTC(2026, 7, 24, 12);
 const day = "2026-08-24";
+const seededOwner = "a".repeat(64);
 const plan: RelayPlan = Object.freeze({
   schema: "afterlight-relay-plan/1",
   operation: "HEARTBEAT",
@@ -43,6 +45,12 @@ const policy = {
 } as const;
 
 describe("fail-closed exact-call executor", () => {
+  it("accepts only scalar or explicitly FRI control receipt fees", () => {
+    expect(readActualFeeFri("0x46")).toBe("70");
+    expect(readActualFeeFri({ amount: "0x46", unit: "FRI" })).toBe("70");
+    expect(readActualFeeFri({ amount: "0x46" })).toBeUndefined();
+    expect(readActualFeeFri({ amount: "0x46", unit: "WEI" })).toBeUndefined();
+  });
   it("does nothing when submission is disabled", async () => {
     const adapter = fakeAdapter();
     const budget = freshBudget();
@@ -88,6 +96,39 @@ describe("fail-closed exact-call executor", () => {
     expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
   });
 
+  it.each([41, 52, 53, 54, 55])(
+    "releases a prepared control reservation after definitive RPC rejection %i",
+    async (code) => {
+      const adapter = fakeAdapter({ submissionError: { baseError: { code } } });
+      const budget = freshBudget();
+      await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+        new ExecutorError("submission_not_started"),
+      );
+      expect(await budget.snapshot(day)).toMatchObject({ reservedTodayFri: "0", spentTodayFri: "0" });
+      expect(await budget.lookup(plan.semanticKey)).toMatchObject({ outcome: "found", state: "released" });
+      expect(adapter.reconcileReceipt).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a prepared control reservation locked after an ambiguous broadcast failure", async () => {
+    const adapter = fakeAdapter({ submissionError: new Error("network unavailable") });
+    const budget = freshBudget();
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+      new ExecutorError("submission_uncertain"),
+    );
+    expect(await budget.snapshot(day)).toMatchObject({
+      reservedTodayFri: "110",
+      spentTodayFri: "0",
+      reservedCount: 1,
+    });
+    expect(await budget.lookup(plan.semanticKey)).toMatchObject({
+      outcome: "found",
+      state: "reserved",
+      transactionHash: "0xabc",
+      preparedPayload: "{}",
+    });
+  });
+
   it("keeps ambiguous receipt exposure reserved for exact-request reconciliation", async () => {
     const adapter = fakeAdapter({ receipt: { status: "pending" } });
     const budget = freshBudget();
@@ -126,6 +167,75 @@ describe("fail-closed exact-call executor", () => {
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
   });
 
+  it("takes over an exact hashless reservation only after its owner lease expires", async () => {
+    const adapter = fakeAdapter();
+    const budget = freshBudget();
+    await budget.reserve({
+      budgetClass: "control",
+      dayKey: day,
+      semanticKey: plan.semanticKey,
+      exactFingerprint: plan.fingerprint,
+      maxFeeFri: "110",
+      perCallCapFri: "200",
+      dailyBudgetFri: "1000",
+      ownerToken: seededOwner,
+      nowMs,
+    });
+
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 1)).resolves.toEqual({
+      status: "duplicate",
+      state: "reserved",
+      transactionHash: null,
+    });
+    const beforeExecutionAdmission = vi.fn(async (ignoredActiveFingerprint?: string) => {
+      expect(ignoredActiveFingerprint).toBe(plan.fingerprint);
+    });
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs + 120_001, beforeExecutionAdmission)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+    });
+    expect(beforeExecutionAdmission).toHaveBeenCalledOnce();
+    expect(adapter.signAndSubmitExact).toHaveBeenCalledOnce();
+  });
+
+  it("rebroadcasts and reconciles an exact prepared checkpoint across semantic buckets", async () => {
+    const adapter = fakeAdapter();
+    const budget = freshBudget();
+    await budget.reserve({
+      budgetClass: "control",
+      dayKey: day,
+      semanticKey: plan.semanticKey,
+      exactFingerprint: plan.fingerprint,
+      maxFeeFri: "110",
+      perCallCapFri: "200",
+      dailyBudgetFri: "1000",
+      ownerToken: seededOwner,
+      nowMs,
+    });
+    await budget.markPrepared(plan.semanticKey, plan.fingerprint, "0xabc", "{}", seededOwner, nowMs + 1);
+    const nextBucket = { ...plan, semanticKey: "b".repeat(64) };
+
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 2)).resolves.toEqual({
+      status: "duplicate",
+      state: "reserved",
+      transactionHash: "0xabc",
+    });
+    expect(adapter.rebroadcastPreparedExact).not.toHaveBeenCalled();
+
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 120_002)).resolves.toMatchObject({
+      status: "accepted",
+      transactionHash: "0xabc",
+    });
+    expect(adapter.rebroadcastPreparedExact).toHaveBeenCalledWith(
+      expect.objectContaining({ semanticKey: plan.semanticKey }),
+      "110",
+      "0xabc",
+      "{}",
+    );
+    expect(adapter.simulateExact).not.toHaveBeenCalled();
+    expect(adapter.signAndSubmitExact).not.toHaveBeenCalled();
+  });
+
   it("recovers a submitted checkpoint after its time-bucket semantic key changes", async () => {
     const adapter = fakeAdapter();
     adapter.reconcileReceipt = vi
@@ -133,15 +243,17 @@ describe("fail-closed exact-call executor", () => {
       .mockResolvedValueOnce({ status: "pending" })
       .mockResolvedValueOnce(successfulReceipt());
     const budget = freshBudget();
-    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs)).rejects.toThrowError(
+    const beforeFreshExecution = vi.fn(async () => {});
+    await expect(executeRelayPlan(plan, policy, adapter, budget, nowMs, beforeFreshExecution)).rejects.toThrowError(
       new ExecutorError("receipt_unreconciled"),
     );
     const nextBucket: RelayPlan = { ...plan, semanticKey: "b".repeat(64) };
-    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 15_000)).resolves.toMatchObject({
+    await expect(executeRelayPlan(nextBucket, policy, adapter, budget, nowMs + 15_000, beforeFreshExecution)).resolves.toMatchObject({
       status: "accepted",
       transactionHash: "0xabc",
       actualFeeFri: "70",
     });
+    expect(beforeFreshExecution).toHaveBeenCalledTimes(1);
     expect(adapter.simulateExact).toHaveBeenCalledTimes(1);
     expect(adapter.signAndSubmitExact).toHaveBeenCalledTimes(1);
     expect(adapter.reconcileReceipt).toHaveBeenCalledTimes(2);
@@ -272,21 +384,26 @@ function successfulSimulation(quotedFeeFri = "100"): ExactSimulation {
 function fakeAdapter(overrides: {
   simulation?: ExactSimulation;
   submission?: ExactSubmission;
+  submissionError?: unknown;
   receipt?: ExactReceipt;
 } = {}): StarknetRelayAdapter & {
   simulateExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["simulateExact"]>>;
   signAndSubmitExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["signAndSubmitExact"]>>;
+  rebroadcastPreparedExact: ReturnType<typeof vi.fn<StarknetRelayAdapter["rebroadcastPreparedExact"]>>;
 } {
   return {
     simulateExact: vi.fn(async () => overrides.simulation ?? successfulSimulation()),
-    signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri) =>
-      overrides.submission ?? {
+    signAndSubmitExact: vi.fn(async (_plan, _simulation, transactionMaxFeeFri, persistPrepared) => {
+      await persistPrepared("0xabc", "{}");
+      if (overrides.submissionError !== undefined) throw overrides.submissionError;
+      return overrides.submission ?? {
         submitted: true,
         transactionHash: "0xabc",
         callFingerprint: plan.fingerprint,
         transactionMaxFeeFri,
-      },
-    ),
+      };
+    }),
+    rebroadcastPreparedExact: vi.fn(async () => {}),
     reconcileReceipt: vi.fn(async () => overrides.receipt ?? successfulReceipt()),
     readRelayerBalance: vi.fn(async () => "1000"),
   };

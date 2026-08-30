@@ -10,9 +10,13 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 ## Current status
 
-**Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://voyager.online/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
+**Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
 
-**Release status: deployed public Mainnet product.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
+**Release status: deployed public Mainnet Recovery Drill.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
+
+The public drill is founder-operated E3 evidence; an unrelated owner-successor E4 completion is not claimed. Neutral sponsorship remains deliberately bounded, but admission is no longer a global one-vault latch. The service admits up to three isolated vaults only when allowance and balance conservatively cover every outstanding exit, accepts allowance only in exact `6 STRK` fee increments, and enforces a fixed daily exit budget. Exit transactions are signed under that policy and returned to the browser for direct RPC broadcast before receipt reconciliation. If the neutral control relay is unavailable, the owner or successor can use an explicit Ready X emergency path; that restores availability but publicly links the Ready address to the vault.
+
+Application-key backups use password-based PBKDF2 with `600,000` SHA-256 iterations and AES-256-GCM authenticated encryption. Existing version 1 plaintext backups can be imported only for migration and must be replaced before funding.
 
 ## Recovery flow
 
@@ -75,6 +79,7 @@ scarb --profile spike-inline-56 build
 
 npm --prefix client ci
 npm --prefix client run verify:locked-artifacts
+npm --prefix client run verify:mainnet
 npm --prefix client test
 
 npm --prefix relayer ci

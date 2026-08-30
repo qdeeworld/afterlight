@@ -1,5 +1,7 @@
 import type {
   ActiveBudgetLookupResult,
+  ActiveBudgetSnapshot,
+  FundingAdmissionResult,
   BudgetMutationResult,
   BudgetReserveInput,
   BudgetReserveResult,
@@ -11,6 +13,7 @@ import { BudgetError } from "./budget.js";
 import type { RelayPlan } from "./core.js";
 import { StarknetV3RelayAdapter } from "./starknet-adapter.js";
 import { SponsorshipError, authorizeSponsorship } from "./sponsorship.js";
+import { classifyBroadcastFailure } from "./rpc-errors.js";
 
 export type ExactFeeQuote = Readonly<{
   nonce: string;
@@ -61,7 +64,14 @@ export interface StarknetRelayAdapter {
     plan: RelayPlan,
     simulation: SuccessfulExactSimulation,
     transactionMaxFeeFri: string,
+    persistPrepared: (expectedTransactionHash: string, preparedPayload: string) => Promise<void>,
   ): Promise<ExactSubmission>;
+  rebroadcastPreparedExact(
+    plan: RelayPlan,
+    transactionMaxFeeFri: string,
+    expectedTransactionHash: string,
+    preparedPayload: string,
+  ): Promise<void>;
   reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt>;
   readRelayerBalance(): Promise<string>;
 }
@@ -76,11 +86,34 @@ export interface BudgetCoordinator {
     transactionHash: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
+  markPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    expectedTransactionHash: string,
+    preparedPayload: string,
+    ownerToken: string,
+    nowMs: number,
+  ): Promise<BudgetMutationResult>;
   release(
     semanticKey: string,
     exactFingerprint: string,
+    ownerToken: string,
     nowMs: number,
   ): Promise<BudgetMutationResult>;
+  takeoverHashless(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): Promise<{ acquired: boolean }>;
+  takeoverPrepared(
+    semanticKey: string,
+    exactFingerprint: string,
+    newOwnerToken: string,
+    nowMs: number,
+    staleAfterMs: number,
+  ): Promise<{ acquired: boolean }>;
   finalize(
     semanticKey: string,
     exactFingerprint: string,
@@ -89,7 +122,13 @@ export interface BudgetCoordinator {
     execution: "succeeded" | "reverted",
     nowMs: number,
   ): Promise<BudgetMutationResult>;
-  snapshot(dayKey: string): Promise<BudgetSnapshot>;
+  snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
+  activeSnapshot(ignoredExactFingerprint?: string): Promise<ActiveBudgetSnapshot>;
+  acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
+  bindFundingAdmissionCheckpoint(nowMs: number, ttlMs: number, ownerToken: string, checkpointBlock: number, checkpointTransactionIndex: number, checkpointTransactionHash: string): Promise<FundingAdmissionResult>;
+  fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): Promise<FundingAdmissionResult>;
+  fundingAdmissionCheckpoint(nowMs: number): Promise<{ blockNumber: number; transactionIndex: number; transactionHash: string } | null>;
+  consumeFundingAdmission(nowMs: number, observedCheckpointBlock: number, observedCheckpointTransactionIndex: number, observedCheckpointTransactionHash: string, fundedSinceCheckpoint: boolean): Promise<FundingAdmissionResult>;
 }
 
 export type ExecutorPolicy = Readonly<{
@@ -144,9 +183,12 @@ export async function executeRelayPlan(
   adapter: StarknetRelayAdapter,
   budget: BudgetCoordinator,
   nowMs: number,
+  beforeExecutionAdmission?: (ignoredActiveFingerprint?: string) => Promise<void>,
 ): Promise<ExecutionResult> {
   if (!policy.submitEnabled) throw new ExecutorError("submission_disabled");
   const dayKey = utcDayKey(nowMs);
+  const ownerToken = reservationOwnerToken();
+  let adoptedMaxFeeFri: string | null = null;
   const prior = await budget.lookup(plan.semanticKey);
   if (prior.outcome === "found" && prior.state !== "released") {
     if (
@@ -162,26 +204,100 @@ export async function executeRelayPlan(
         nowMs,
       );
     }
-    return duplicateResult(prior.state, prior.transactionHash);
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash !== null &&
+      prior.preparedPayload !== null &&
+      prior.exactFingerprint === plan.fingerprint
+    ) {
+      const takeover = await budget.takeoverPrepared(
+        plan.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(prior.state, prior.transactionHash);
+      return rebroadcastPreparedControl(plan, prior.maxFeeFri, adapter, budget, prior.transactionHash, prior.preparedPayload, nowMs);
+    }
+    if (
+      prior.state === "reserved" &&
+      prior.transactionHash === null &&
+      prior.preparedPayload === null &&
+      prior.exactFingerprint === plan.fingerprint
+    ) {
+      const takeover = await budget.takeoverHashless(
+        plan.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(prior.state, prior.transactionHash);
+      adoptedMaxFeeFri = prior.maxFeeFri;
+    } else {
+      return duplicateResult(prior.state, prior.transactionHash);
+    }
   }
   if (prior.sponsorshipFrozen) throw new ExecutorError("sponsorship_frozen");
 
   // A Worker request can end after broadcast but before receipt reconciliation.
   // Recover the one serialized SUBMITTED exposure by its stable exact call
   // fingerprint before reserving a new time-bucket semantic key.
-  const active = await budget.findActiveByFingerprint?.(plan.fingerprint);
+  const active = adoptedMaxFeeFri === null
+    ? await budget.findActiveByFingerprint?.(plan.fingerprint)
+    : undefined;
   if (active?.outcome === "found") {
+    const activePlan = Object.freeze({ ...plan, semanticKey: active.semanticKey });
     if (active.state === "submitted" && active.transactionHash !== null) {
       return reconcileSubmitted(
         active.transactionHash,
-        Object.freeze({ ...plan, semanticKey: active.semanticKey }),
+        activePlan,
         adapter,
         budget,
         nowMs,
       );
     }
-    return duplicateResult(active.state, active.transactionHash);
+    if (active.state === "reserved" && active.transactionHash !== null && active.preparedPayload !== null) {
+      const takeover = await budget.takeoverPrepared(
+        active.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(active.state, active.transactionHash);
+      return rebroadcastPreparedControl(
+        activePlan,
+        active.maxFeeFri,
+        adapter,
+        budget,
+        active.transactionHash,
+        active.preparedPayload,
+        nowMs,
+      );
+    }
+    if (active.state === "reserved" && active.transactionHash === null && active.preparedPayload === null) {
+      const takeover = await budget.takeoverHashless(
+        active.semanticKey,
+        plan.fingerprint,
+        ownerToken,
+        nowMs,
+        120_000,
+      );
+      if (!takeover.acquired) return duplicateResult(active.state, active.transactionHash);
+      plan = activePlan;
+      adoptedMaxFeeFri = active.maxFeeFri;
+    } else {
+      return duplicateResult(active.state, active.transactionHash);
+    }
   }
+
+  // Admission checks that would reject an already-submitted retry belong only
+  // on the fresh path, after both semantic and fingerprint reconciliation.
+  await beforeExecutionAdmission?.(
+    adoptedMaxFeeFri === null ? undefined : plan.fingerprint,
+  );
 
   const simulation = await adapter.simulateExact(plan);
   if (!simulation.ok) throw new ExecutorError("simulation_failed");
@@ -206,15 +322,20 @@ export async function executeRelayPlan(
   }
 
   const maxFeeFri = authorization.transactionMaxFeeFri.toString();
-  let reservation: BudgetReserveResult;
-  try {
+  if (adoptedMaxFeeFri !== null && BigInt(maxFeeFri) > BigInt(adoptedMaxFeeFri)) {
+    throw new ExecutorError("fee_policy_rejected");
+  }
+  let reservation: BudgetReserveResult | undefined;
+  if (adoptedMaxFeeFri === null) try {
     reservation = await budget.reserve({
+      budgetClass: "control",
       dayKey,
       semanticKey: plan.semanticKey,
       exactFingerprint: plan.fingerprint,
       maxFeeFri,
       perCallCapFri: policy.perCallCapFri.toString(),
       dailyBudgetFri: policy.dailyBudgetFri.toString(),
+      ownerToken,
       nowMs,
     });
   } catch (error) {
@@ -223,7 +344,7 @@ export async function executeRelayPlan(
     }
     throw error;
   }
-  if (reservation.outcome !== "reserved") {
+  if (reservation !== undefined && reservation.outcome !== "reserved") {
     const raced = await budget.lookup(plan.semanticKey);
     if (raced.outcome === "found" && raced.state !== "released") {
       return duplicateResult(raced.state, raced.transactionHash);
@@ -233,14 +354,49 @@ export async function executeRelayPlan(
 
   let submission: ExactSubmission;
   try {
-    submission = await adapter.signAndSubmitExact(plan, simulation, maxFeeFri);
-  } catch {
+    submission = await adapter.signAndSubmitExact(
+      plan,
+      simulation,
+      maxFeeFri,
+      async (expectedTransactionHash, preparedPayload) => {
+        const prepared = await budget.markPrepared(
+          plan.semanticKey,
+          plan.fingerprint,
+          expectedTransactionHash,
+          preparedPayload,
+          ownerToken,
+          nowMs,
+        );
+        if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
+          throw new ExecutorError("submission_not_started");
+        }
+      },
+    );
+  } catch (error) {
+    if (classifyBroadcastFailure(error).definitiveReject) {
+      try {
+        const released = await budget.release(
+          plan.semanticKey,
+          plan.fingerprint,
+          ownerToken,
+          nowMs,
+        );
+        if (released.outcome === "released" || released.outcome === "already_released") {
+          throw new ExecutorError("submission_not_started");
+        }
+      } catch (releaseError) {
+        if (releaseError instanceof ExecutorError) throw releaseError;
+        // A later owner may have atomically taken over a stale hashless row.
+        // Never let the displaced request release or reclassify that row.
+        throw new ExecutorError("submission_uncertain");
+      }
+    }
     // An unexpected transport failure may have occurred after broadcast. Keep
     // the reservation until an operator reconciles the account nonce/receipt.
     throw new ExecutorError("submission_uncertain");
   }
   if (!submission.submitted) {
-    await budget.release(plan.semanticKey, plan.fingerprint, nowMs);
+    await budget.release(plan.semanticKey, plan.fingerprint, ownerToken, nowMs);
     throw new ExecutorError("submission_not_started");
   }
   if (
@@ -268,6 +424,42 @@ export async function executeRelayPlan(
     budget,
     nowMs,
   );
+}
+
+export function reservationOwnerToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function rebroadcastPreparedControl(
+  plan: RelayPlan,
+  transactionMaxFeeFri: string,
+  adapter: StarknetRelayAdapter,
+  budget: BudgetCoordinator,
+  expectedTransactionHash: string,
+  preparedPayload: string,
+  nowMs: number,
+): Promise<ExecutionResult> {
+  try {
+    await adapter.rebroadcastPreparedExact(
+      plan,
+      transactionMaxFeeFri,
+      expectedTransactionHash,
+      preparedPayload,
+    );
+  } catch {
+    // The exact stored transaction is idempotent. A duplicate response or a
+    // transport loss may mean either broadcast landed, so the receipt remains
+    // authoritative and the reservation must stay locked.
+  }
+  await budget.markSubmitted(
+    plan.semanticKey,
+    plan.fingerprint,
+    expectedTransactionHash,
+    nowMs,
+  );
+  return reconcileSubmitted(expectedTransactionHash, plan, adapter, budget, nowMs);
 }
 
 async function reconcileSubmitted(

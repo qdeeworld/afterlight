@@ -9,7 +9,7 @@ Afterlight separates private value movement, application authorization, and tran
 | Ready X and STRK20 | Shielded balances, private invocation, proof preparation, and exact open-note settlement | Owner or successor application secrets outside the user's device |
 | Afterlight Cairo contract | Vault state, signed authorization, liabilities, timing, exact-note binding, and terminal settlement | Ready wallet identity assumptions |
 | Client library | Per-vault key generation, typed authorization hashes, STRK20 action assembly, proof-envelope/call binding, and independent managed-exit receipt reconciliation | Relayer account key |
-| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, checkpoints, and strictly validated exact-note claim packages from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
+| Neutral relayer | Submit bounded `HEARTBEAT`, `REQUEST`, `VETO`, checkpoints, and strictly validated exact-note claim/cancellation packages from one neutral account | Owner/successor secrets, Ready addresses, or authority over contract state |
 
 ## Action routing
 
@@ -17,13 +17,19 @@ Afterlight separates private value movement, application authorization, and tran
 
 `HEARTBEAT`, `REQUEST`, and `VETO` are public state transitions authorized by per-vault Stark signatures. Any submitter may relay a valid authorization; the submitter is never the authority.
 
-For a public claim, Ready creates the exact OPEN note and proof locally. The
-successor application key binds that literal note to the current vault, epoch,
-nonce, token and amount. A neutral sponsor accepts only the locked pool call,
+For a private exit, Ready creates the exact OPEN note and proof locally. The
+successor application key binds a claim—or the owner application key binds a
+cancellation—to that literal note, current vault, epoch, nonce, token and
+amount. A neutral sponsor accepts only the locked pool call,
 proof facts, application signature, live state, exact allowance and bounded
 resource quote, then signs and broadcasts the outer transaction once. The
 contract and pool remain authoritative; package preparation alone is not
 execution evidence.
+
+The sponsor independently pins the live STRK20 pool class and permits exactly
+`WriteOnce`, `EmitOpenNoteCreated`, then `Invoke`. The first action must write
+the canonical packed token value to the storage key derived from the signed
+destination note. Extra actions or writes fail before signing.
 
 ```text
 Ready X + STRK20 pool
@@ -70,6 +76,25 @@ held token balance >= existing locked liabilities + new fixed reserve
 ```
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
+
+The public product reads the sponsor's collapsed claim-capacity status. New
+funding is admitted beside existing liabilities only when fee-aligned allowance,
+sponsor balance, the retained floor, the daily exit budget, reservations and
+leases conservatively cover every admitted vault. The policy caps admission at
+three outstanding vaults and still serializes one funding checkpoint and one
+neutral-account nonce operation at a time. A caller bypassing the supported
+route cannot consume another vault's backing or increase the service's promised
+capacity. Claim and cancellation fail closed when backing is insufficient. The
+contract and pool remain final.
+
+For private exits the Worker validates the exact note, proof, application
+signature, live state and fee bounds, signs the outer sponsor transaction, and
+persists its deterministic hash. It returns that signed transaction to the
+browser for independent public RPC broadcast, then reconciles the receipt. For
+heartbeat, request and veto the privacy-first route remains the neutral relay.
+An explicit Ready X emergency route can submit the same signed application
+authorization directly if availability is more important than hiding the Ready
+address.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or

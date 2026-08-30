@@ -1,4 +1,4 @@
-name: Post-spike relayer health
+name: Production judged-path health
 
 on:
   schedule:
@@ -14,13 +14,14 @@ concurrency:
 
 jobs:
   health:
-    name: Verify production submission and privacy boundary
+    name: Verify judged path, submission, and privacy boundary
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check HTTPS health and security boundary
         env:
           HEALTH_URL: https://afterlight-relayer-phase-a.qdworld001.workers.dev/health
+          APP_URL: https://afterlight.dolepee.com
         run: |
           set -euo pipefail
           evidence_dir="$(mktemp -d)"
@@ -46,6 +47,8 @@ jobs:
             .executor.executable == true and
             .balance.status == "ok" and
             .balance.alert == false and
+            .claimCapacity.status == "ready" and
+            .claimCapacity.fundingStatus == "ready" and
             .privacy.payloadLogging == false and
             .privacy.appKeysHeld == false and
             .privacy.walletAddressesRequired == false
@@ -54,3 +57,15 @@ jobs:
           grep -Eiq '^cache-control: no-store' "$evidence_dir/headers"
           grep -Eiq '^content-security-policy:.*default-src .none.' "$evidence_dir/headers"
           grep -Eiq '^x-content-type-options: nosniff' "$evidence_dir/headers"
+
+          curl \
+            --fail-with-body \
+            --silent \
+            --show-error \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 20 \
+            --output "$evidence_dir/app.html" \
+            "$APP_URL"
+          grep -Fq '<title>Afterlight' "$evidence_dir/app.html"

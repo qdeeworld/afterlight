@@ -12,6 +12,7 @@ export const CHECKPOINT_PATH = "/v1/checkpoint";
 export const HEALTH_PATH = "/health";
 export const RELAY_INTENT_HEADER = "relay-control";
 export const CHECKPOINT_INTENT_HEADER = "funding-checkpoint";
+export const CHECKPOINT_ADMISSION_HEADER = "x-afterlight-admission";
 export type RelayPlanOperation = RelayOperation | "CHECKPOINT";
 
 const EXPECTED_STATE: Readonly<Record<RelayOperation, bigint>> = Object.freeze({
@@ -59,10 +60,13 @@ export class RelayHttpError extends Error {
   }
 }
 
-/** Builds a global, payload-free checkpoint call with no wallet or vault correlation key. */
-export async function prepareCheckpointPlan(env: Env, nowMs: number): Promise<RelayPlan> {
+/** Builds a payload-free checkpoint bound only to a fresh, opaque funding-attempt owner. */
+export async function prepareCheckpointPlan(env: Env, nowMs: number, admissionToken: string): Promise<RelayPlan> {
   if (!Number.isSafeInteger(nowMs) || nowMs < 0) {
     throw new RelayHttpError(500, "invalid_checkpoint_time");
+  }
+  if (!/^[0-9a-f]{64}$/.test(admissionToken)) {
+    throw new RelayHttpError(400, "invalid_admission_token");
   }
   const maxSponsoredFeeFri = parsePositiveDecimal(env.MAX_SPONSORED_FEE_FRI, "fee_cap");
   const dailySponsorBudgetFri = parsePositiveDecimal(
@@ -78,16 +82,17 @@ export async function prepareCheckpointPlan(env: Env, nowMs: number): Promise<Re
     calldata: Object.freeze([]) as readonly string[],
   });
   const fingerprint = await sha256Hex(
-    JSON.stringify({ chainId: env.STARKNET_CHAIN_ID, operation: "CHECKPOINT", call }),
+    JSON.stringify({ chainId: env.STARKNET_CHAIN_ID, operation: "CHECKPOINT", call, admissionToken }),
   );
-  // One neutral checkpoint per 15-second bucket prevents unbounded sponsorship
-  // while retaining no client, wallet, note, vault, or signature identifier.
+  // The opaque owner keeps exact retries idempotent without letting another
+  // browser reuse the first caller's checkpoint admission or adding wallet,
+  // note, vault, or signature material to the public call.
   const semanticKey = await sha256Hex(
     JSON.stringify({
       chainId: env.STARKNET_CHAIN_ID,
       contract: call.contractAddress,
       operation: "afterlight-checkpoint/1",
-      bucket: Math.floor(nowMs / 15_000),
+      admissionToken,
     }),
   );
   return Object.freeze({
@@ -271,23 +276,27 @@ export function requireRelayHeaders(request: Request, env: Env): void {
   }
 }
 
-export async function requireCheckpointHeaders(request: Request, env: Env): Promise<void> {
+export async function requireCheckpointHeaders(request: Request, env: Env): Promise<string> {
   if (!isAllowedOrigin(request.headers.get("origin"), env.ALLOWED_ORIGIN)) {
     throw new RelayHttpError(403, "origin_not_allowed");
   }
   if (request.headers.get("x-afterlight-intent") !== CHECKPOINT_INTENT_HEADER) {
     throw new RelayHttpError(400, "intent_header_required");
   }
+  const admissionToken = request.headers.get(CHECKPOINT_ADMISSION_HEADER);
+  if (admissionToken === null || !/^[0-9a-f]{64}$/.test(admissionToken)) {
+    throw new RelayHttpError(400, "invalid_admission_token");
+  }
   const contentLength = request.headers.get("content-length");
   if (contentLength !== null && (!/^[0-9]+$/.test(contentLength) || contentLength !== "0")) {
     throw new RelayHttpError(400, "checkpoint_payload_forbidden");
   }
-  if (request.body === null) return;
+  if (request.body === null) return admissionToken;
   const reader = request.body.getReader();
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) return;
+      if (done) return admissionToken;
       if (value.byteLength > 0) {
         await reader.cancel("checkpoint payload forbidden");
         throw new RelayHttpError(400, "checkpoint_payload_forbidden");
@@ -302,7 +311,7 @@ export function corsHeaders(origin: string): HeadersInit {
   return {
     "access-control-allow-origin": origin,
     "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type, x-afterlight-intent",
+    "access-control-allow-headers": "content-type, x-afterlight-intent, x-afterlight-admission",
     "access-control-max-age": "600",
     vary: "Origin",
   };

@@ -9,6 +9,7 @@ import {
 } from "starknet";
 
 import type { RelayPlan } from "./core.js";
+import { assertOuterSignatureMatchesHash } from "./neutral-exit-policy.mjs";
 import {
   type ExactFeeQuote,
   type ExactReceipt,
@@ -70,8 +71,10 @@ export class StarknetV3RelayAdapter implements StarknetRelayAdapter {
     plan: RelayPlan,
     simulation: SuccessfulExactSimulation,
     transactionMaxFeeFri: string,
+    persistPrepared: (expectedTransactionHash: string, preparedPayload: string) => Promise<void>,
   ): Promise<ExactSubmission> {
     let signed;
+    let expectedHash: string;
     try {
       await this.assertChain(plan);
       if (simulation.callFingerprint !== plan.fingerprint) return { submitted: false };
@@ -96,18 +99,45 @@ export class StarknetV3RelayAdapter implements StarknetRelayAdapter {
       ) {
         return { submitted: false };
       }
+      expectedHash = normalizeHex(assertOuterSignatureMatchesHash(signed));
+      await persistPrepared(expectedHash, serializeSignedTransaction(signed));
     } catch {
-      // Every operation above precedes broadcast, so releasing the reservation
-      // is safe. Only invokeSignedTx transport errors are submission-uncertain.
+      // Every operation above precedes broadcast, including durable persistence
+      // of the exact signed artifact and deterministic transaction hash.
       return { submitted: false };
     }
     const response = await this.provider.invokeSignedTx(signed);
+    if (normalizeHex(response.transaction_hash) !== expectedHash) throw new Error("submission_mismatch");
     return {
       submitted: true,
-      transactionHash: normalizeHex(response.transaction_hash),
+      transactionHash: expectedHash,
       callFingerprint: plan.fingerprint,
       transactionMaxFeeFri,
     };
+  }
+
+  async rebroadcastPreparedExact(
+    plan: RelayPlan,
+    transactionMaxFeeFri: string,
+    expectedTransactionHash: string,
+    preparedPayload: string,
+  ): Promise<void> {
+    const signed = parseSignedTransaction(preparedPayload);
+    if (
+      normalizeHex(String(signed.sender_address)) !== normalizeHex(this.account.address) ||
+      !Array.isArray(signed.calldata) ||
+      !sameFelts(signed.calldata as string[], transaction.getExecuteCalldata([toCall(plan)], this.cairoVersion)) ||
+      resourceCap(stark.resourceBoundsToBigInt(
+        signed.resource_bounds as Parameters<typeof stark.resourceBoundsToBigInt>[0],
+      )) > strictPositiveDecimal(transactionMaxFeeFri) ||
+      normalizeHex(assertOuterSignatureMatchesHash(signed)) !== normalizeHex(expectedTransactionHash)
+    ) {
+      throw new Error("prepared_submission_mismatch");
+    }
+    const response = await this.provider.invokeSignedTx(signed as Parameters<RpcProvider["invokeSignedTx"]>[0]);
+    if (normalizeHex(response.transaction_hash) !== normalizeHex(expectedTransactionHash)) {
+      throw new Error("submission_mismatch");
+    }
   }
 
   async reconcileReceipt(transactionHash: string, plan: RelayPlan): Promise<ExactReceipt> {
@@ -261,13 +291,28 @@ function strictNonNegativeDecimal(value: string): bigint {
   return BigInt(value);
 }
 
-function readActualFeeFri(value: unknown): string | undefined {
+export function readActualFeeFri(value: unknown): string | undefined {
   if (typeof value === "string" && /^0x[0-9a-f]+$/i.test(value)) return BigInt(value).toString();
   if (typeof value !== "object" || value === null) return undefined;
   const record = value as Record<string, unknown>;
   const amount = record.amount;
-  if (record.unit !== undefined && record.unit !== "FRI") return undefined;
+  if (record.unit !== "FRI") return undefined;
   return typeof amount === "string" && /^0x[0-9a-f]+$/i.test(amount)
     ? BigInt(amount).toString()
     : undefined;
+}
+
+function serializeSignedTransaction(signed: unknown): string {
+  const payload = JSON.stringify(signed, (_key, value) => typeof value === "bigint" ? value.toString() : value);
+  if (payload.length < 2 || payload.length > 100_000) throw new TypeError("invalid prepared transaction");
+  return payload;
+}
+
+function parseSignedTransaction(payload: string): Record<string, unknown> {
+  if (payload.length < 2 || payload.length > 100_000) throw new TypeError("invalid prepared transaction");
+  const parsed: unknown = JSON.parse(payload);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new TypeError("invalid prepared transaction");
+  }
+  return parsed as Record<string, unknown>;
 }

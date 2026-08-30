@@ -143,5 +143,6 @@ jobs:
       - run: npm ci
       - name: Install shared client type dependencies
         run: npm --prefix ../client ci
+      - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=high
