@@ -5,7 +5,22 @@ import { assertMainnet, readLiability, readVault } from "./chain.ts";
 import { parseInvitation, stateName, type RecoveryInvitation, type Role, type VaultSnapshot, type WalletStatus } from "./model.ts";
 import { connectReady, detectReady, type ReadySession } from "./wallet.ts";
 import { ExitSubmissionError, exportEncryptedKey, fundRecoveryReserve, generateKey, hasPendingCheckpointReconciliation, isLegacyPlaintextKeyBackup, prepareExitPackage, relayControl, restoreEncryptedKey, restoreKey, submitControlDirect, submitExitPackage } from "./operations.ts";
+import { isThemePreference, resolveTheme, type ThemePreference } from "./theme.ts";
 import type { LocalStarkKey } from "../../client/src/keys.ts";
+
+const THEME_STORAGE_KEY = "afterlight:theme:v1";
+const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
+const storedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+let themePreference: ThemePreference = isThemePreference(storedTheme) ? storedTheme : "system";
+
+function applyTheme(): void {
+  const theme = resolveTheme(themePreference, colorScheme.matches);
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d100f" : "#f3efe6");
+}
+
+applyTheme();
 
 let role: Role = (new URL(location.href).searchParams.get("role") === "successor") ? "successor" : "owner";
 let walletStatus: WalletStatus = "checking";
@@ -169,6 +184,37 @@ function journeyProgress(): string {
   </ol>`;
 }
 
+function journeySignal(): string {
+  const invitationValid = parseInvitation(invitationText).valid;
+  const current = vault?.exists ? stateName(vault.state) : undefined;
+  let now: string;
+  let safe: string;
+  let next: string;
+
+  if (role === "owner") {
+    if (walletStatus !== "connected") now = "Connect Ready X";
+    else if (!applicationKey || backupState !== "verified") now = "Secure your owner key";
+    else if (!invitationValid) now = "Set the successor and terms";
+    else if (!vault?.exists) now = "Fund the reserve privately";
+    else if (current === "GRACE") now = "Veto or allow recovery";
+    else if (current === "ACTIVE") now = "Keep the heartbeat current";
+    else now = "Review the completed outcome";
+    safe = current === "ACTIVE" ? "Reserve remains protected" : current === "GRACE" ? "Owner control remains live" : invitationValid ? "Invitation verified locally" : "No funds move before confirmation";
+    next = current === "ACTIVE" ? "Heartbeat, cancel, or wait" : current === "GRACE" ? "First valid veto or claim wins" : vault?.exists ? "Terminal state cannot replay" : "Exact cost appears before funding";
+  } else {
+    if (!applicationKey || backupState !== "verified") now = "Secure your successor key";
+    else if (!invitationValid) now = "Import the recovery invitation";
+    else if (!vault?.exists) now = "Read the live reserve";
+    else if (current === "ACTIVE") now = "Wait until inactivity expires";
+    else if (current === "GRACE") now = "Wait for grace, then recover";
+    else now = "Review the completed outcome";
+    safe = current === "CLAIMED" ? "Recovery settled exactly once" : invitationValid ? "Invitation matches the designated key" : "Your secret stays on this device";
+    next = current === "GRACE" ? "Claim binds one exact private note" : current === "ACTIVE" ? "Request opens the owner veto window" : vault?.exists ? "Terminal state cannot replay" : "No wallet request before verification";
+  }
+
+  return `<section class="journey-signal" aria-label="Current recovery summary"><div data-signal="now"><span>Now</span><strong>${escapeHtml(now)}</strong></div><div data-signal="safe"><span>Safe</span><strong>${escapeHtml(safe)}</strong></div><div data-signal="next"><span>Next</span><strong>${escapeHtml(next)}</strong></div></section>`;
+}
+
 function download(filename: string, contents: string): void {
   const blob = new Blob([`${contents}\n`], { type: "application/json" });
   const link = document.createElement("a");
@@ -317,9 +363,10 @@ function statusPanel(): string {
 
 function render(): void {
   const reconcilingCancellation = pendingExit?.action === "CANCEL_REFUND";
-  app.innerHTML = `<div class="ambient-glow" aria-hidden="true"></div><header class="site-header"><a class="brand" href="/"><span aria-hidden="true"><i></i></span>Afterlight</a><div class="network"><span aria-hidden="true"></span><strong>Mainnet</strong><small>Starknet</small></div></header>
+  app.innerHTML = `<div class="ambient-glow" aria-hidden="true"></div><header class="site-header"><a class="brand" href="/"><span aria-hidden="true"><i></i></span>Afterlight</a><div class="header-tools"><label class="theme-control"><span>Appearance</span><select data-theme-preference aria-label="Appearance"><option value="system" ${themePreference === "system" ? "selected" : ""}>System</option><option value="light" ${themePreference === "light" ? "selected" : ""}>Light</option><option value="dark" ${themePreference === "dark" ? "selected" : ""}>Dark</option></select></label><div class="network"><span aria-hidden="true"></span><strong>Mainnet</strong><small>Starknet</small></div></div></header>
   <main id="main"><section class="intro"><div class="intro-copy"><p class="kicker">Private recovery, under your control</p><h1>A reserve that waits for the person you trust.</h1><p>Fund privately. Stay present through heartbeat and veto. If you go inactive, only the designated successor key can authorize recovery to one exact private note.</p></div><div class="afterlight-orbit" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"></span><small>protected<br />until needed</small></div></section>
   <nav class="role-switch" aria-label="Choose your recovery role"><button class="role-choice" data-role="owner" aria-pressed="${role === "owner"}"><span class="role-index">01</span><span><strong>I own the reserve</strong><small>Create, heartbeat, veto or cancel</small></span><b aria-hidden="true">↗</b></button><button class="role-choice" data-role="successor" aria-pressed="${role === "successor"}"><span class="role-index">02</span><span><strong>I am the successor</strong><small>Prepare, request and recover</small></span><b aria-hidden="true">↗</b></button></nav>
+  ${journeySignal()}
   <div class="activity-banner" role="status" aria-live="polite" data-busy="${busy}"><span aria-hidden="true">${busy ? "…" : ""}</span><p>${busy ? "Working · " : ""}${escapeHtml(notice)}</p></div>
   <div class="content-grid">${role === "owner" ? ownerView() : successorView()}${statusPanel()}</div></main>
   <footer><span>Recovery infrastructure, not legal inheritance automation.</span><div><span>Built with STRK20 on Starknet</span><a href="https://github.com/dolepee/afterlight">Open source contract ↗</a></div></footer>
@@ -343,6 +390,13 @@ async function run(action: () => Promise<void>): Promise<void> {
 }
 
 function bindEvents(): void {
+  document.querySelector<HTMLSelectElement>("[data-theme-preference]")?.addEventListener("change", (event) => {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    if (!isThemePreference(value)) return;
+    themePreference = value;
+    localStorage.setItem(THEME_STORAGE_KEY, value);
+    applyTheme();
+  });
   document.querySelectorAll<HTMLButtonElement>("[data-role]").forEach((button) => button.addEventListener("click", () => {
     const nextRole = button.dataset.role === "successor" ? "successor" : "owner";
     if (nextRole === role) return;
@@ -594,3 +648,6 @@ void run(async () => {
 });
 
 window.addEventListener("beforeunload", () => applicationKey?.destroy());
+colorScheme.addEventListener("change", () => {
+  if (themePreference === "system") applyTheme();
+});
