@@ -146,9 +146,9 @@ function assertInvitationMatchesVault(invitation: RecoveryInvitation, snapshot: 
   }
 }
 
-function progressStep(label: string, detail: string, complete: boolean, current: boolean): string {
+function progressStep(index: number, label: string, detail: string, complete: boolean, current: boolean): string {
   const state = complete ? "complete" : current ? "current" : "upcoming";
-  return `<li data-state="${state}"><span aria-hidden="true">${complete ? "✓" : ""}</span><div><strong>${label}</strong><small>${detail}</small></div></li>`;
+  return `<li data-state="${state}"><span aria-hidden="true">${complete ? "✓" : index}</span><div><strong>${label}</strong><small>${detail}</small></div></li>`;
 }
 
 function journeyProgress(): string {
@@ -157,15 +157,15 @@ function journeyProgress(): string {
   const hasKey = Boolean(applicationKey);
   if (role === "owner") {
     return `<ol class="journey-progress" aria-label="Owner journey progress">
-      ${progressStep("Connect", "Ready X", hasWallet, !hasWallet)}
-      ${progressStep("Set up", "Keys and terms", invitationValid, hasWallet && !invitationValid)}
-      ${progressStep("Protect", "Fund and stay active", vault?.exists === true, invitationValid)}
+      ${progressStep(1, "Connect", "Ready X", hasWallet, !hasWallet)}
+      ${progressStep(2, "Set up", "Keys and terms", invitationValid, hasWallet && !invitationValid)}
+      ${progressStep(3, "Protect", "Fund and stay active", vault?.exists === true, invitationValid)}
     </ol>`;
   }
   return `<ol class="journey-progress" aria-label="Successor journey progress">
-    ${progressStep("Prepare", "Your recovery key", hasKey, !hasKey)}
-    ${progressStep("Verify", "Recovery invitation", invitationValid, hasKey && !invitationValid)}
-    ${progressStep("Recover", "Live vault and claim", vault?.exists === true, invitationValid)}
+    ${progressStep(1, "Prepare", "Your recovery key", hasKey, !hasKey)}
+    ${progressStep(2, "Verify", "Recovery invitation", invitationValid, hasKey && !invitationValid)}
+    ${progressStep(3, "Recover", "Live vault and claim", vault?.exists === true, invitationValid)}
   </ol>`;
 }
 
@@ -189,7 +189,7 @@ function walletCopy(): string {
 
 function keyPanel(person: "owner" | "successor"): string {
   const isCurrent = role === person;
-  return `<section class="key-panel"><div class="section-heading"><span class="step-number">${person === "owner" ? "02" : "01"}</span>
+  return `<section class="key-panel" data-complete="${applicationKey && isCurrent && backupState === "verified"}"><div class="section-heading"><span class="step-number">${person === "owner" ? "02" : "01"}</span>
     <div><strong>${person === "owner" ? "Create your owner control key" : "Prepare your successor key"}</strong><p>Generated locally for one vault. The secret never reaches the relayer or Ready X.</p></div></div>
     ${applicationKey && isCurrent ? `<code>${escapeHtml(applicationKey.publicKey)}</code><div class="password-fields" role="group" aria-labelledby="backup-password-title"><strong id="backup-password-title">Protect the backup with a password</strong><label class="full-field"><span>Backup password</span><input data-backup-password type="password" minlength="12" maxlength="256" autocomplete="new-password" spellcheck="false" /><small>Use at least 12 characters. Afterlight never stores or receives this password.</small></label><label class="full-field"><span>Confirm backup password</span><input data-backup-password-confirm type="password" minlength="12" maxlength="256" autocomplete="new-password" spellcheck="false" /></label></div><div class="button-row"><button class="button secondary" data-action="copy-key">Copy public key</button><button class="button secondary" data-action="download-key">Download encrypted backup</button></div><p class="${backupState === "verified" ? "success" : "warning"}">${backupState === "verified" ? "Encrypted backup restored and verified on this device." : backupState === "downloaded" ? "Now restore the downloaded file below to verify its password before funding." : "Download and restore the encrypted key backup before funding."}</p>` : `<button class="button secondary" data-action="generate-key">Generate ${person} key locally</button>`}
     <aside class="secret-warning"><strong>Password protected signing key</strong><p>The exported JSON uses PBKDF2 and AES GCM encryption in this browser. Keep the file and password separate. Losing the password makes the backup unrecoverable.</p></aside>
@@ -217,14 +217,12 @@ function ownerView(): string {
   const canFund = canFundReserve();
   const pendingFunding = hasPendingCheckpointReconciliation();
   const liveControls = invitation.valid && vault?.exists;
-  return `<section class="journey" data-role-view="owner" aria-labelledby="owner-heading">
-    <div class="journey-heading"><div><p class="eyebrow">Owner · live on Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"} · 1 STRK</span></div>
-    <p class="lede">Privately set aside 1 STRK. Heartbeat while active and veto a recovery request during grace.</p>
+  return `<section class="journey recovery-chamber" data-role-view="owner" aria-labelledby="owner-heading">
+    <header class="journey-heading"><div><p class="eyebrow">Owner path · Starknet Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2><p class="lede">Privately set aside 1 STRK. Stay in control while active and veto during the recovery window.</p></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"}<strong>1 STRK</strong></span></header>
     ${journeyProgress()}
-    <details class="restore-reserve"><summary>Restore an existing owner reserve</summary><div class="restore-reserve-body"><label class="full-field"><span>Recovery invitation</span><textarea name="owner-invitation" rows="7" placeholder="Paste Afterlight invitation JSON">${escapeHtml(invitationText)}</textarea><small>Use this after browser storage loss. The package is checked locally against Mainnet before controls are enabled.</small></label><button class="button secondary" data-action="validate-owner-invitation">Verify and load reserve</button></div></details>
-    ${walletRow()}
+    <div class="journey-body">${walletRow()}
     ${keyPanel("owner")}
-    <form id="reserve-form" class="setup-form"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>Both modes use fixed, contract-enforced terms.</p></div></div>
+    <form id="reserve-form" class="setup-form" data-ready="${canFund}"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>Normal mode is the long-term default. The drill uses the same rules on a shorter clock.</p></div></div>
       <fieldset><legend>Choose a timing mode</legend><label class="choice ${reserveMode === "NORMAL" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="NORMAL" ${reserveMode === "NORMAL" ? "checked" : ""} /><span><strong>30 days + 7 days</strong><small>Long-term inactivity and grace</small></span></label><label class="choice ${reserveMode === "FAST_DEMO" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="FAST_DEMO" ${reserveMode === "FAST_DEMO" ? "checked" : ""} /><span><strong>5 min + 5 min</strong><small>Clearly labelled Recovery Drill</small></span></label></fieldset>
       <label class="full-field"><span>Designated successor public key</span><input name="successor-key" autocomplete="off" spellcheck="false" placeholder="0x…" value="${escapeHtml(successorPublicKey)}" /><small>The successor must generate this independently. Do not accept their secret.</small></label>
       <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this reserve uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction. Neutral exit sponsorship is capacity-limited and rechecked later; recovery or cancellation waits if capacity must be restored.</p></aside>
@@ -234,19 +232,19 @@ function ownerView(): string {
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
       ${applicationKey && backupState !== "verified" ? `<p class="error">Download and restore the owner key backup before funding.</p>` : ""}
     </form>
-    ${invitation.valid ? controlPanel(invitation.invitation, liveControls ? vault : undefined) : ""}
+    ${invitation.valid ? controlPanel(invitation.invitation, liveControls ? vault : undefined) : ""}</div>
+    <details class="restore-reserve utility-panel"><summary>Restore an existing owner reserve</summary><div class="restore-reserve-body"><label class="full-field"><span>Recovery invitation</span><textarea name="owner-invitation" rows="7" placeholder="Paste Afterlight invitation JSON">${escapeHtml(invitationText)}</textarea><small>Use this after browser storage loss. The package is checked locally against Mainnet before controls are enabled.</small></label><button class="button secondary" data-action="validate-owner-invitation">Verify and load reserve</button></div></details>
   </section>`;
 }
 
 function successorView(): string {
   const parsed = parseInvitation(invitationText);
-  return `<section class="journey" data-role-view="successor" aria-labelledby="successor-heading">
-    <div class="journey-heading"><div><p class="eyebrow">Successor · live on Mainnet</p><h2 id="successor-heading">Recover a reserve privately</h2></div><span class="journey-mode">Designated key only</span></div>
-    <p class="lede">Generate your own per-vault key, import the invitation, and request only after authenticated inactivity.</p>
+  return `<section class="journey recovery-chamber" data-role-view="successor" aria-labelledby="successor-heading">
+    <header class="journey-heading"><div><p class="eyebrow">Successor path · Starknet Mainnet</p><h2 id="successor-heading">Prepare to recover a reserve</h2><p class="lede">Generate your own per-vault key, verify the invitation, and request only after authenticated inactivity.</p></div><span class="journey-mode">Designated key<strong>Exact note only</strong></span></header>
     ${journeyProgress()}
-    ${keyPanel("successor")}
+    <div class="journey-body">${keyPanel("successor")}
     ${invitationPanel(parsed)}
-    ${parsed.valid ? `${walletRow()}${controlPanel(parsed.invitation, vault)}` : ""}
+    ${parsed.valid ? `${walletRow()}${controlPanel(parsed.invitation, vault)}` : ""}</div>
   </section>`;
 }
 
@@ -257,6 +255,15 @@ function invitationPanel(parsed: ReturnType<typeof parseInvitation>): string {
   }
   const timing = parsed.invitation.mode === "NORMAL" ? "30 days + 7 days" : "5 + 5 min drill";
   return `<section class="invitation-panel verified"><div class="section-heading"><span class="step-number">02</span><div><strong>Invitation verified</strong><p>Contract, designated key and recovery terms match Afterlight Mainnet.</p></div><span class="verified-mark">Verified</span></div><div class="invitation-facts"><span><small>Vault</small><strong>${short(parsed.invitation.vaultId)}</strong></span><span><small>Reserve</small><strong>1 STRK</strong></span><span><small>Timing</small><strong>${timing}</strong></span></div><details class="invitation-editor"><summary>Replace invitation</summary>${editor}</details></section>`;
+}
+
+function formatDeadline(unixSeconds: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(unixSeconds * 1000));
 }
 
 function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot): string {
@@ -277,12 +284,12 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
         : undefined;
   const timingLabel = current === "GRACE" ? "Claim after" : current === "ACTIVE" ? "Inactive after" : "Settlement";
   const timingValue = current === "GRACE"
-    ? new Date(Number(snapshot.claimAfter) * 1000).toLocaleTimeString()
+    ? formatDeadline(Number(snapshot.claimAfter))
     : current === "ACTIVE"
-      ? new Date(inactiveAt * 1000).toLocaleTimeString()
+      ? formatDeadline(inactiveAt)
       : current;
   const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note." : "The reserve returned privately to its owner.";
-  return `<section class="control-panel live-state" data-vault-state="${current}"><div class="control-heading"><div><span class="state-chip">${current}</span><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
+  return `<section class="control-panel live-state" data-vault-state="${current}"><div class="state-beacon" aria-hidden="true"><span></span></div><div class="control-heading"><div><span class="state-chip">${current}</span><h3>${current === "ACTIVE" ? "Reserve protected" : current === "GRACE" ? "Owner still has control" : current === "CLAIMED" ? "Recovery complete" : "Reserve returned"}</h3><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
     ${pendingCancellation ? `<button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private return</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
     ${pendingClaim ? `<button class="button primary" data-action="claim" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private recovery</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
@@ -302,7 +309,7 @@ function statusPanel(): string {
   const contextualReceipts = receipts
     .filter((item) => !parsed.valid || item.vaultId === undefined || item.vaultId === parsed.invitation.vaultId)
     .slice(0, 3);
-  return `<aside class="status-panel"><p class="status-label">${current === "Not loaded" ? "What Afterlight protects" : "Live outcome"}</p><strong>${headline}</strong><p>${parsed.valid ? `${current} · ${short(parsed.invitation.vaultId)}` : "Create or import a reserve to read its live state."}</p>
+  return `<aside class="status-panel recovery-map"><div class="map-orbit" aria-hidden="true"><span></span><i></i></div><p class="status-label">${current === "Not loaded" ? "Recovery map" : "Live outcome"}</p><strong>${headline}</strong><p>${parsed.valid ? `${current} · ${short(parsed.invitation.vaultId)}` : "Create or import a reserve to activate its live recovery map."}</p>
     <div class="trace"><div><span>✓</span><p><strong>Funding relationship</strong><small>Unlinked by STRK20</small></p></div><div><span>✓</span><p><strong>Heartbeat and veto wallet</strong><small>Unlinked when the neutral relay is used</small></p></div><div><span>✓</span><p><strong>Recovery destination</strong><small>Bound to one exact private note</small></p></div><div class="public"><span>○</span><p><strong>Timing and denomination</strong><small>Remain public</small></p></div></div>
     ${contextualReceipts.length ? `<div class="receipt-history" aria-label="Recent Mainnet actions"><strong>Recent Mainnet actions</strong>${contextualReceipts.map((item) => `<a class="receipt" href="https://voyager.online/tx/${escapeHtml(item.hash)}" target="_blank" rel="noreferrer"><span>${escapeHtml(item.label)}</span><small>${new Date(item.recordedAt).toLocaleString()}</small></a>`).join("")}</div>` : ""}
     <details><summary>Truthful privacy boundary</summary><p>The contract, token, fixed denomination, application public keys, timing and state changes remain public. Ready wallet relationships and later private-note activity stay unlinked.</p></details></aside>`;
@@ -310,12 +317,12 @@ function statusPanel(): string {
 
 function render(): void {
   const reconcilingCancellation = pendingExit?.action === "CANCEL_REFUND";
-  app.innerHTML = `<header class="site-header"><a class="brand" href="/"><span aria-hidden="true">◐</span>Afterlight</a><div class="network"><span aria-hidden="true"></span>Live on Starknet Mainnet</div></header>
-  <main id="main"><section class="intro"><div><p class="kicker">Private recovery, under your control</p><h1>A private reserve for the person you trust.</h1><p>Keep the relationship unlinked. Heartbeat while active, veto during grace, and let only the designated successor key authorize private recovery.</p></div><div class="promise"><span>01</span><p><strong>Fund privately</strong><small>The owner-to-vault link stays unlinked.</small></p><span>02</span><p><strong>Stay in control</strong><small>Heartbeat or veto through a neutral relay.</small></p><span>03</span><p><strong>Recover exactly once</strong><small>One designated key. One exact private note.</small></p></div></section>
-  <nav class="role-tabs" aria-label="Choose your role"><button data-role="owner" aria-current="${role === "owner" ? "page" : "false"}">I’m the owner</button><button data-role="successor" aria-current="${role === "successor" ? "page" : "false"}">I’m the successor</button></nav>
-  <div class="activity-banner" role="status" aria-live="polite" data-busy="${busy}"><span aria-hidden="true">${busy ? "…" : "●"}</span><p>${busy ? "Working · " : ""}${escapeHtml(notice)}</p></div>
+  app.innerHTML = `<div class="ambient-glow" aria-hidden="true"></div><header class="site-header"><a class="brand" href="/"><span aria-hidden="true"><i></i></span>Afterlight</a><div class="network"><span aria-hidden="true"></span><strong>Mainnet</strong><small>Starknet</small></div></header>
+  <main id="main"><section class="intro"><div class="intro-copy"><p class="kicker">Private recovery, under your control</p><h1>A reserve that waits for the person you trust.</h1><p>Fund privately. Stay present through heartbeat and veto. If you go inactive, only the designated successor key can authorize recovery to one exact private note.</p></div><div class="afterlight-orbit" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"></span><small>protected<br />until needed</small></div></section>
+  <nav class="role-switch" aria-label="Choose your recovery role"><button class="role-choice" data-role="owner" aria-pressed="${role === "owner"}"><span class="role-index">01</span><span><strong>I own the reserve</strong><small>Create, heartbeat, veto or cancel</small></span><b aria-hidden="true">↗</b></button><button class="role-choice" data-role="successor" aria-pressed="${role === "successor"}"><span class="role-index">02</span><span><strong>I am the successor</strong><small>Prepare, request and recover</small></span><b aria-hidden="true">↗</b></button></nav>
+  <div class="activity-banner" role="status" aria-live="polite" data-busy="${busy}"><span aria-hidden="true">${busy ? "…" : ""}</span><p>${busy ? "Working · " : ""}${escapeHtml(notice)}</p></div>
   <div class="content-grid">${role === "owner" ? ownerView() : successorView()}${statusPanel()}</div></main>
-  <footer><span>Afterlight is a recovery tool, not legal inheritance automation.</span><a href="https://github.com/dolepee/afterlight">Open-source contract</a></footer>
+  <footer><span>Recovery infrastructure, not legal inheritance automation.</span><div><span>Built with STRK20 on Starknet</span><a href="https://github.com/dolepee/afterlight">Open source contract ↗</a></div></footer>
   <dialog id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-description"><form method="dialog"><p class="eyebrow">Private return</p><h2 id="cancel-title">${reconcilingCancellation ? "Reconcile the pending return?" : "Cancel this reserve?"}</h2><p id="cancel-description">${reconcilingCancellation ? "Afterlight will resubmit the exact retained package only to reconcile its receipt. No new note or authorization is prepared." : "Its 1 STRK principal returns to this Ready X private balance. The reserve cannot be recovered afterward."}</p><div class="button-row"><button class="button secondary" type="button" data-action="dismiss-cancel">${reconcilingCancellation ? "Not now" : "Keep reserve active"}</button><button class="button danger" type="button" data-action="confirm-cancel">${reconcilingCancellation ? "Reconcile exact package" : "Cancel and return 1 STRK"}</button></div></form></dialog>`;
   bindEvents();
 }
@@ -337,7 +344,14 @@ async function run(action: () => Promise<void>): Promise<void> {
 
 function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>("[data-role]").forEach((button) => button.addEventListener("click", () => {
-    role = button.dataset.role === "successor" ? "successor" : "owner";
+    const nextRole = button.dataset.role === "successor" ? "successor" : "owner";
+    if (nextRole === role) return;
+    if (applicationKey && backupState !== "verified") {
+      notice = "Verify this key backup before switching roles. Afterlight will not discard an unverified recovery key.";
+      render();
+      return;
+    }
+    role = nextRole;
     applicationKey?.destroy();
     applicationKey = undefined;
     backupState = "needed";

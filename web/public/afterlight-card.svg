@@ -1,31 +1,51 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title description">
-  <title id="title">Afterlight — private control over time</title>
-  <desc id="description">Private Starknet recovery reserves with heartbeat, grace, veto, and exact-note recovery.</desc>
-  <rect width="1200" height="675" fill="#fffdf8"/>
-  <rect x="44" y="44" width="1112" height="587" rx="30" fill="#f4f1e9" stroke="#d8d3c8" stroke-width="2"/>
-  <g transform="translate(92 88)">
-    <rect width="54" height="54" rx="13" fill="#191915"/>
-    <circle cx="27" cy="27" r="15" fill="#d86f31"/>
-    <circle cx="34" cy="21" r="14" fill="#191915"/>
-    <circle cx="21" cy="37" r="2.5" fill="#fffdf8"/>
-    <text x="72" y="39" fill="#191915" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="750">Afterlight</text>
+  <title id="title">Afterlight private recovery reserve</title>
+  <desc id="description">A reserve that waits for the person you trust, privately funded through STRK20.</desc>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="44%" r="55%">
+      <stop offset="0" stop-color="#ffd0a2"/>
+      <stop offset="0.25" stop-color="#e69a55"/>
+      <stop offset="0.62" stop-color="#7b3c18"/>
+      <stop offset="1" stop-color="#171512"/>
+    </radialGradient>
+    <radialGradient id="ambient" cx="82%" cy="18%" r="70%">
+      <stop offset="0" stop-color="#e69a55" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#0d100f" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="675" fill="#0d100f"/>
+  <rect width="1200" height="675" fill="url(#ambient)"/>
+  <path d="M48 76h1104" stroke="#313a34"/>
+  <g transform="translate(54 28)">
+    <circle cx="20" cy="20" r="18" fill="none" stroke="#465249"/>
+    <circle cx="20" cy="20" r="10" fill="none" stroke="#68472f"/>
+    <circle cx="20" cy="20" r="5" fill="#e69a55"/>
+    <text x="52" y="27" fill="#f4f0e6" font-family="Avenir Next, Arial, sans-serif" font-size="23" font-weight="650">Afterlight</text>
   </g>
-  <text x="92" y="245" fill="#8e3514" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="750" letter-spacing="2.4">PRIVATE STARKNET RECOVERY</text>
-  <text x="92" y="323" fill="#191915" font-family="Georgia, 'Times New Roman', serif" font-size="68" font-weight="500" letter-spacing="-2">Private control</text>
-  <text x="92" y="391" fill="#191915" font-family="Georgia, 'Times New Roman', serif" font-size="68" font-weight="500" letter-spacing="-2">over time.</text>
-  <text x="92" y="448" fill="#68685f" font-family="Inter, Arial, sans-serif" font-size="24">Fund privately. Heartbeat while active. Veto during grace.</text>
-  <g transform="translate(92 510)" font-family="Inter, Arial, sans-serif" font-size="18" font-weight="700">
-    <rect width="160" height="52" rx="26" fill="#191915"/><text x="80" y="33" fill="#fffdf8" text-anchor="middle">PROTECTED</text>
-    <path d="M176 26h42" stroke="#8e3514" stroke-width="3"/><path d="m211 18 9 8-9 8" fill="none" stroke="#8e3514" stroke-width="3"/>
-    <rect x="234" width="148" height="52" rx="26" fill="#ebe6db" stroke="#d8d3c8"/><text x="308" y="33" fill="#191915" text-anchor="middle">GRACE</text>
-    <path d="M398 26h42" stroke="#8e3514" stroke-width="3"/><path d="m433 18 9 8-9 8" fill="none" stroke="#8e3514" stroke-width="3"/>
-    <rect x="456" width="250" height="52" rx="26" fill="#d86f31"/><text x="581" y="33" fill="#191915" text-anchor="middle">PRIVATE RECOVERY</text>
+  <g transform="translate(78 157)">
+    <text y="0" fill="#e69a55" font-family="Consolas, monospace" font-size="15" font-weight="700" letter-spacing="2.4">PRIVATE RECOVERY, UNDER YOUR CONTROL</text>
+    <text y="93" fill="#f4f0e6" font-family="Georgia, Times New Roman, serif" font-size="72" letter-spacing="-3">A reserve that waits</text>
+    <text y="169" fill="#f4f0e6" font-family="Georgia, Times New Roman, serif" font-size="72" letter-spacing="-3">for the person you trust.</text>
+    <text y="226" fill="#a7b0a9" font-family="Avenir Next, Arial, sans-serif" font-size="22">Fund privately. Stay present. Recover exactly once.</text>
   </g>
-  <g transform="translate(925 188)">
-    <circle cx="82" cy="82" r="82" fill="#191915"/>
-    <circle cx="82" cy="82" r="57" fill="#d86f31"/>
-    <circle cx="109" cy="61" r="55" fill="#191915"/>
-    <circle cx="60" cy="122" r="9" fill="#fffdf8"/>
+  <g transform="translate(78 496)" font-family="Avenir Next, Arial, sans-serif">
+    <circle cx="17" cy="17" r="17" fill="#72c99b"/><text x="17" y="23" fill="#0d100f" font-size="16" font-weight="700" text-anchor="middle">✓</text>
+    <text x="47" y="15" fill="#f4f0e6" font-size="17" font-weight="650">Fund privately</text><text x="47" y="37" fill="#737d76" font-size="14">STRK20 keeps the wallet link unlinked</text>
+    <path d="M306 17h55" stroke="#313a34"/>
+    <circle cx="386" cy="17" r="17" fill="#e69a55"/><text x="386" y="23" fill="#0d100f" font-size="14" font-weight="700" text-anchor="middle">2</text>
+    <text x="416" y="15" fill="#f4f0e6" font-size="17" font-weight="650">Stay in control</text><text x="416" y="37" fill="#737d76" font-size="14">Heartbeat and veto through a neutral relay</text>
+    <path d="M734 17h55" stroke="#313a34"/>
+    <circle cx="814" cy="17" r="17" fill="none" stroke="#465249"/><text x="814" y="23" fill="#a7b0a9" font-size="14" font-weight="700" text-anchor="middle">3</text>
+    <text x="844" y="15" fill="#f4f0e6" font-size="17" font-weight="650">Recover exactly once</text><text x="844" y="37" fill="#737d76" font-size="14">One designated key and one exact note</text>
   </g>
-  <text x="1007" y="404" fill="#68685f" font-family="Inter, Arial, sans-serif" font-size="18" text-anchor="middle">Powered by STRK20</text>
+  <g transform="translate(903 155)">
+    <circle cx="120" cy="120" r="108" fill="none" stroke="#68472f" stroke-opacity="0.55"/>
+    <circle cx="120" cy="120" r="77" fill="none" stroke="#465249"/>
+    <circle cx="120" cy="120" r="39" fill="url(#glow)" stroke="#e9b37e" stroke-opacity="0.4"/>
+    <circle cx="206" cy="57" r="5" fill="#e69a55"/>
+    <circle cx="82" cy="190" r="4" fill="#72c99b"/>
+    <text x="222" y="214" fill="#a7b0a9" font-family="Consolas, monospace" font-size="12" letter-spacing="1.5" text-anchor="end">PROTECTED</text>
+    <text x="222" y="232" fill="#a7b0a9" font-family="Consolas, monospace" font-size="12" letter-spacing="1.5" text-anchor="end">UNTIL NEEDED</text>
+  </g>
+  <text x="78" y="626" fill="#737d76" font-family="Consolas, monospace" font-size="14">LIVE ON STARKNET MAINNET · BUILT WITH STRK20</text>
 </svg>
