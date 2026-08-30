@@ -693,7 +693,10 @@ export class RelayBudget extends DurableObject<Env> {
     return this.ctx.storage.transactionSync(() => {
       const current = this.fundingAdmissionState();
       const active = current.expiresAtMs !== null && current.expiresAtMs > now;
-      if (!active || current.checkpointMarker === null || observed === current.checkpointMarker) {
+      // The permissionless checkpoint may be refreshed by anyone, so a
+      // different nonzero marker is not proof of FUND. Only the contract's
+      // successful FUND path resets the bound one-shot marker to zero.
+      if (!active || current.checkpointMarker === null || observed !== "0") {
         return {
           acquired: false,
           active,

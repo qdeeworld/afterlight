@@ -134,12 +134,17 @@ describe("deployment-wide sponsorship coordinator", () => {
       active: true,
       expiresAtMs: 1_201_000,
     });
-    expect(await budget.consumeFundingAdmission(601_004, "0")).toEqual({
+    expect(await budget.consumeFundingAdmission(601_004, "78")).toEqual({
+      acquired: false,
+      active: true,
+      expiresAtMs: 1_201_000,
+    });
+    expect(await budget.consumeFundingAdmission(601_005, "0")).toEqual({
       acquired: false,
       active: false,
       expiresAtMs: 1_201_000,
     });
-    expect((await budget.fundingAdmissionSnapshot(601_005)).active).toBe(false);
+    expect((await budget.fundingAdmissionSnapshot(601_006)).active).toBe(false);
   });
 
   it("enforces per-call and daily exposure inside the atomic reservation", async () => {
