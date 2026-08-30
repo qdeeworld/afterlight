@@ -6,7 +6,7 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 [Open Afterlight](https://afterlight.dolepee.com) · [Mainnet evidence](docs/MAINNET.md) · [Deployed contract](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25)
 
-[![CI](https://github.com/dolepee/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/dolepee/afterlight/actions/workflows/ci.yml)
+[![CI](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml)
 
 ## Current status
 
