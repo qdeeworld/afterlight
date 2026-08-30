@@ -1,4 +1,4 @@
-import { Account, RpcProvider, transaction, type Call } from "starknet";
+import { Account, RpcProvider, hash, transaction, type Call } from "starknet";
 import { reservationOwnerToken, type BudgetCoordinator } from "./executor.js";
 import { classifyBroadcastFailure, rpcErrorCode } from "./rpc-errors.js";
 export { classifyBroadcastFailure } from "./rpc-errors.js";
@@ -63,6 +63,7 @@ const TOKEN = EXIT_POLICY.tokenAddress;
 const AFTERLIGHT = EXIT_POLICY.afterlightAddress;
 const NEUTRAL = EXIT_POLICY.neutralAddress;
 const FUNDING_CHECKPOINT_MAX_AGE_SECONDS = 300n;
+const FUNDING_CHECKPOINT_AT_STORAGE_KEY = `0x${hash.starknetKeccak("funding_checkpoint_at").toString(16)}`;
 
 export class ExitExecutorError extends Error {
   constructor(readonly code: "invalid_exit" | "exit_unavailable" | "exit_busy" | "exit_uncertain" | "exit_reverted") {
@@ -83,7 +84,6 @@ export type ClaimCapacity = Readonly<{
   reason: "ready" | "allowance" | "balance" | "ledger" | "configuration";
   fundingStatus: "ready" | "exhausted" | "unknown";
   fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
-  observedLiabilityFri: string | null;
 }>;
 
 export async function readClaimCapacity(
@@ -103,7 +103,7 @@ export async function readClaimCapacity(
     const block = latest.block_number;
     const call = (contractAddress: string, entrypoint: string, calldata: string[] = []) =>
       provider.callContract({ contractAddress, entrypoint, calldata }, block);
-    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw, configRaw] = await Promise.all([
+    const [poolClass, neutralClass, afterlightClass, balanceRaw, allowanceRaw, liabilityRaw, feeRaw, collectorRaw, configRaw, checkpointMarkerRaw] = await Promise.all([
       provider.getClassHashAt(POOL, block),
       provider.getClassHashAt(NEUTRAL, block),
       provider.getClassHashAt(AFTERLIGHT, block),
@@ -113,6 +113,7 @@ export async function readClaimCapacity(
       call(POOL, "get_fee_amount"),
       call(POOL, "get_fee_collector"),
       call(AFTERLIGHT, "get_config"),
+      provider.getStorageAt(AFTERLIGHT, FUNDING_CHECKPOINT_AT_STORAGE_KEY, block),
     ]);
     if (
       normalizeHex(poolClass) !== normalizeHex(LOCKED_POOL_CLASS_HASH) ||
@@ -128,10 +129,10 @@ export async function readClaimCapacity(
     const balance = parseU256Result(balanceRaw, "balance");
     const liability = parseU256Result(liabilityRaw, "liability");
     if (budget !== undefined) {
-      // Only growth beyond the lease's recorded liability baseline proves that
-      // its admitted FUND consumed the one-shot checkpoint. Existing vaults
-      // must not let unrelated capacity reads clear a fresh admission lease.
-      await budget.consumeFundingAdmission(Date.now(), liability.toString());
+      // A successful FUND resets the contract's one-shot checkpoint marker.
+      // Comparing that marker avoids both pre-existing-liability false clears
+      // and net-liability races with concurrent private exits.
+      await budget.consumeFundingAdmission(Date.now(), BigInt(storageValue(checkpointMarkerRaw)).toString());
     }
     const configuredVaultLimit = parseBoundedVaultLimit(env.MAX_OUTSTANDING_VAULTS);
     const configuredDailyBudget = parseConfiguredDailyExitBudget(env.DAILY_EXIT_BUDGET_FRI);
@@ -167,24 +168,23 @@ export function assessChainCapacity(input: Readonly<{
   const fee = BigInt(EXIT_POLICY.poolFeeEachFri);
   const maxAllowance = BigInt(EXIT_POLICY.maxPoolAllowanceFri);
   if (input.allowance < fee || input.allowance > maxAllowance || input.allowance % fee !== 0n) {
-    return exhaustedCapacity("allowance", input.liability);
+    return exhaustedCapacity("allowance");
   }
   const fixedAmount = BigInt(EXIT_POLICY.fixedAmountFri);
   if (input.liability < 0n || input.liability % fixedAmount !== 0n) return unknownCapacity();
   const floor = BigInt(EXIT_POLICY.postSpendHealthFloorFri);
   const perExitReserve = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
-  if (input.balance < perExitReserve + floor) return exhaustedCapacity("balance", input.liability);
+  if (input.balance < perExitReserve + floor) return exhaustedCapacity("balance");
   const allowanceSlots = input.allowance / fee;
   const balanceSlots = (input.balance - floor) / perExitReserve;
   const sponsorSlots = minBigInt(allowanceSlots, balanceSlots, input.maxOutstandingVaults);
   const activeVaults = input.liability / fixedAmount;
-  if (sponsorSlots === 0n) return exhaustedCapacity(balanceSlots === 0n ? "balance" : "allowance", input.liability);
+  if (sponsorSlots === 0n) return exhaustedCapacity(balanceSlots === 0n ? "balance" : "allowance");
   return {
     status: "ready",
     reason: "ready",
     fundingStatus: activeVaults < sponsorSlots ? "ready" : "exhausted",
     fundingReason: activeVaults < sponsorSlots ? "ready" : "outstanding_liability",
-    observedLiabilityFri: input.liability.toString(),
   };
 }
 
@@ -213,11 +213,25 @@ export function applyLedgerCapacity(
 }
 
 function unknownCapacity(): ClaimCapacity {
-  return { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration", observedLiabilityFri: null };
+  return { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration" };
 }
 
-function exhaustedCapacity(reason: "allowance" | "balance", liability: bigint): ClaimCapacity {
-  return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity", observedLiabilityFri: liability.toString() };
+function exhaustedCapacity(reason: "allowance" | "balance"): ClaimCapacity {
+  return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+}
+
+export async function readFundingCheckpointMarker(env: Env): Promise<string> {
+  const provider = new RpcProvider({
+    nodeUrl: env.EXIT_RPC_URL,
+    headers: { authorization: `Bearer ${env.STARKNET_RPC_AUTH_TOKEN}` },
+    plugins: false,
+  });
+  const marker = await provider.getStorageAt(AFTERLIGHT, FUNDING_CHECKPOINT_AT_STORAGE_KEY, "latest");
+  return BigInt(storageValue(marker)).toString();
+}
+
+function storageValue(value: string | Readonly<{ value: string }>): string {
+  return typeof value === "string" ? value : value.value;
 }
 
 export function validatePreparedExitPayload(payload: string): ValidatedExit {

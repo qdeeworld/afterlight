@@ -81,19 +81,19 @@ describe("deployment-wide sponsorship coordinator", () => {
     expect(await budget.snapshot(dayOne)).toMatchObject({ reservedTodayFri: "0" });
   });
 
-  it("atomically grants only one live funding admission until its lease expires", async () => {
+  it("holds one admission until its exact onchain checkpoint marker is consumed", async () => {
     const budget = freshBudget();
     expect(await budget.fundingAdmissionSnapshot(1_000)).toEqual({
       acquired: false,
       active: false,
       expiresAtMs: null,
     });
-    expect(await budget.acquireFundingAdmission(1_000, 600_000, owner, "100")).toEqual({
+    expect(await budget.acquireFundingAdmission(1_000, 600_000, owner)).toEqual({
       acquired: true,
       active: true,
       expiresAtMs: 601_000,
     });
-    expect(await budget.acquireFundingAdmission(2_000, 600_000, owner, "100")).toEqual({
+    expect(await budget.acquireFundingAdmission(2_000, 600_000, owner)).toEqual({
       acquired: true,
       active: true,
       expiresAtMs: 601_000,
@@ -113,24 +113,33 @@ describe("deployment-wide sponsorship coordinator", () => {
       active: true,
       expiresAtMs: 601_000,
     });
-    expect(await budget.acquireFundingAdmission(2_000, 600_000, alternateOwner, "100")).toEqual({
+    expect(await budget.acquireFundingAdmission(2_000, 600_000, alternateOwner)).toEqual({
       acquired: false,
       active: true,
       expiresAtMs: 601_000,
     });
-    expect((await budget.acquireFundingAdmission(601_000, 600_000, alternateOwner, "100")).acquired).toBe(true);
-    expect(await budget.consumeFundingAdmission(601_001, "100")).toEqual({
+    expect((await budget.acquireFundingAdmission(601_000, 600_000, alternateOwner)).acquired).toBe(true);
+    expect(await budget.consumeFundingAdmission(601_001, "0")).toEqual({
       acquired: false,
       active: true,
       expiresAtMs: 1_201_000,
     });
-    expect((await budget.fundingAdmissionSnapshot(601_002)).active).toBe(true);
-    expect(await budget.consumeFundingAdmission(601_003, "101")).toEqual({
+    expect(await budget.bindFundingAdmissionCheckpoint(601_002, alternateOwner, "77")).toEqual({
+      acquired: true,
+      active: true,
+      expiresAtMs: 1_201_000,
+    });
+    expect(await budget.consumeFundingAdmission(601_003, "77")).toEqual({
+      acquired: false,
+      active: true,
+      expiresAtMs: 1_201_000,
+    });
+    expect(await budget.consumeFundingAdmission(601_004, "0")).toEqual({
       acquired: false,
       active: false,
       expiresAtMs: 1_201_000,
     });
-    expect((await budget.fundingAdmissionSnapshot(601_004)).active).toBe(false);
+    expect((await budget.fundingAdmissionSnapshot(601_005)).active).toBe(false);
   });
 
   it("enforces per-call and daily exposure inside the atomic reservation", async () => {

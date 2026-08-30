@@ -28,7 +28,7 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedExit, ExitExecutorError, readClaimCapacity, validatePreparedExitPayload } from "./exit-executor.js";
+import { executePreparedExit, ExitExecutorError, readClaimCapacity, readFundingCheckpointMarker, validatePreparedExitPayload } from "./exit-executor.js";
 
 export { RelayBudget } from "./budget.js";
 
@@ -63,6 +63,7 @@ export default {
 
       let plan: RelayPlan;
       let estimateOnly = false;
+      let checkpointAdmissionToken: string | undefined;
       let beforeExecutionAdmission: ((ignoredActiveFingerprint?: string) => Promise<void>) | undefined;
       if (url.pathname === EXIT_PATH) {
         const exitMode = url.searchParams.get("mode");
@@ -85,6 +86,7 @@ export default {
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         const admissionToken = await requireCheckpointHeaders(request, env);
+        checkpointAdmissionToken = admissionToken;
         await rateLimitCheckpoint(env);
         plan = await prepareCheckpointPlan(env, Date.now(), admissionToken);
         if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
@@ -97,14 +99,12 @@ export default {
               ignoredActiveFingerprint,
             );
             requireFundingAdmission(capacity);
-            if (capacity.observedLiabilityFri === null) throw new RelayHttpError(503, "funding_unavailable");
             const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
             if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
               Number(ttlMs),
               admissionToken,
-              capacity.observedLiabilityFri,
             );
             if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
           };
@@ -169,6 +169,13 @@ export default {
           nowMs,
           beforeExecutionAdmission,
         );
+        if (url.pathname === CHECKPOINT_PATH && result.transactionHash !== null) {
+          if (checkpointAdmissionToken === undefined) throw new RelayHttpError(503, "funding_unavailable");
+          const marker = await readFundingCheckpointMarker(env);
+          if (marker === "0") throw new RelayHttpError(503, "funding_unavailable");
+          const bound = await budget.bindFundingAdmissionCheckpoint(Date.now(), checkpointAdmissionToken, marker);
+          if (!bound.acquired) throw new RelayHttpError(503, "funding_unavailable");
+        }
         return jsonResponse(
           { status: "relayed", result },
           200,
@@ -279,10 +286,7 @@ function isSubmissionEnabled(value: string): boolean {
   return value === "true";
 }
 
-export function requireFundingAdmission(
-  capacity: Omit<Awaited<ReturnType<typeof readClaimCapacity>>, "observedLiabilityFri"> &
-    Partial<Pick<Awaited<ReturnType<typeof readClaimCapacity>>, "observedLiabilityFri">>,
-): void {
+export function requireFundingAdmission(capacity: Awaited<ReturnType<typeof readClaimCapacity>>): void {
   if (capacity.fundingStatus !== "ready") {
     throw new RelayHttpError(503, "funding_unavailable");
   }
