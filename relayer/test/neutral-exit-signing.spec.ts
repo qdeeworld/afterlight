@@ -84,7 +84,7 @@ describe("neutral exact-exit signing boundary", () => {
   });
 
   it("reports capacity exhausted when the sponsorship ledger cannot reserve a full exit", () => {
-    const ready = { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" } as const;
+    const ready = { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready", observedLiabilityFri: "0" } as const;
     const base = { reservedTodayFri: "0", spentTodayFri: "0", reservedCount: 0, submittedCount: 0, sponsorshipFrozen: false };
     expect(applyLedgerCapacity(ready, base)).toEqual(ready);
     for (const unavailable of [
@@ -109,6 +109,7 @@ describe("neutral exact-exit signing boundary", () => {
       reason: "ready",
       fundingStatus: "exhausted",
       fundingReason: "exit_capacity",
+      observedLiabilityFri: "0",
     });
   });
 
@@ -136,6 +137,7 @@ describe("neutral exact-exit signing boundary", () => {
       reason: "ready",
       fundingStatus: "exhausted",
       fundingReason: "outstanding_liability",
+      observedLiabilityFri: (3n * unit).toString(),
     });
     expect(assessChainCapacity({ ...fundedForThree, liability: 4n * unit })).toMatchObject({
       fundingStatus: "exhausted",

@@ -90,18 +90,21 @@ export default {
         if (isSubmissionEnabled(env.SUBMIT_ENABLED)) {
           beforeExecutionAdmission = async (ignoredActiveFingerprint) => {
             const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
-            requireFundingAdmission(await readClaimCapacity(
+            const capacity = await readClaimCapacity(
               env,
               budget,
               admissionToken,
               ignoredActiveFingerprint,
-            ));
+            );
+            requireFundingAdmission(capacity);
+            if (capacity.observedLiabilityFri === null) throw new RelayHttpError(503, "funding_unavailable");
             const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
             if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
               Number(ttlMs),
               admissionToken,
+              capacity.observedLiabilityFri,
             );
             if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
           };
@@ -276,7 +279,10 @@ function isSubmissionEnabled(value: string): boolean {
   return value === "true";
 }
 
-export function requireFundingAdmission(capacity: Awaited<ReturnType<typeof readClaimCapacity>>): void {
+export function requireFundingAdmission(
+  capacity: Omit<Awaited<ReturnType<typeof readClaimCapacity>>, "observedLiabilityFri"> &
+    Partial<Pick<Awaited<ReturnType<typeof readClaimCapacity>>, "observedLiabilityFri">>,
+): void {
   if (capacity.fundingStatus !== "ready") {
     throw new RelayHttpError(503, "funding_unavailable");
   }

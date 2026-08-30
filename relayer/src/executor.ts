@@ -124,9 +124,9 @@ export interface BudgetCoordinator {
   ): Promise<BudgetMutationResult>;
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
   activeSnapshot(ignoredExactFingerprint?: string): Promise<ActiveBudgetSnapshot>;
-  acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
+  acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string, baselineLiabilityFri: string): Promise<FundingAdmissionResult>;
   fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): Promise<FundingAdmissionResult>;
-  consumeFundingAdmission(nowMs: number): Promise<FundingAdmissionResult>;
+  consumeFundingAdmission(nowMs: number, observedLiabilityFri: string): Promise<FundingAdmissionResult>;
 }
 
 export type ExecutorPolicy = Readonly<{

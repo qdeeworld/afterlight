@@ -83,6 +83,7 @@ export type ClaimCapacity = Readonly<{
   reason: "ready" | "allowance" | "balance" | "ledger" | "configuration";
   fundingStatus: "ready" | "exhausted" | "unknown";
   fundingReason: "ready" | "outstanding_liability" | "exit_capacity" | "configuration";
+  observedLiabilityFri: string | null;
 }>;
 
 export async function readClaimCapacity(
@@ -126,11 +127,11 @@ export async function readClaimCapacity(
     const allowance = parseU256Result(allowanceRaw, "allowance");
     const balance = parseU256Result(balanceRaw, "balance");
     const liability = parseU256Result(liabilityRaw, "liability");
-    if (liability !== 0n && budget !== undefined) {
-      // Any liability increase proves the admitted FUND consumed the one-shot
-      // checkpoint. The lease can close without treating other isolated
-      // vaults as a global funding lock.
-      await budget.consumeFundingAdmission(Date.now());
+    if (budget !== undefined) {
+      // Only growth beyond the lease's recorded liability baseline proves that
+      // its admitted FUND consumed the one-shot checkpoint. Existing vaults
+      // must not let unrelated capacity reads clear a fresh admission lease.
+      await budget.consumeFundingAdmission(Date.now(), liability.toString());
     }
     const configuredVaultLimit = parseBoundedVaultLimit(env.MAX_OUTSTANDING_VAULTS);
     const configuredDailyBudget = parseConfiguredDailyExitBudget(env.DAILY_EXIT_BUDGET_FRI);
@@ -166,23 +167,24 @@ export function assessChainCapacity(input: Readonly<{
   const fee = BigInt(EXIT_POLICY.poolFeeEachFri);
   const maxAllowance = BigInt(EXIT_POLICY.maxPoolAllowanceFri);
   if (input.allowance < fee || input.allowance > maxAllowance || input.allowance % fee !== 0n) {
-    return exhaustedCapacity("allowance");
+    return exhaustedCapacity("allowance", input.liability);
   }
   const fixedAmount = BigInt(EXIT_POLICY.fixedAmountFri);
   if (input.liability < 0n || input.liability % fixedAmount !== 0n) return unknownCapacity();
   const floor = BigInt(EXIT_POLICY.postSpendHealthFloorFri);
   const perExitReserve = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
-  if (input.balance < perExitReserve + floor) return exhaustedCapacity("balance");
+  if (input.balance < perExitReserve + floor) return exhaustedCapacity("balance", input.liability);
   const allowanceSlots = input.allowance / fee;
   const balanceSlots = (input.balance - floor) / perExitReserve;
   const sponsorSlots = minBigInt(allowanceSlots, balanceSlots, input.maxOutstandingVaults);
   const activeVaults = input.liability / fixedAmount;
-  if (sponsorSlots === 0n) return exhaustedCapacity(balanceSlots === 0n ? "balance" : "allowance");
+  if (sponsorSlots === 0n) return exhaustedCapacity(balanceSlots === 0n ? "balance" : "allowance", input.liability);
   return {
     status: "ready",
     reason: "ready",
     fundingStatus: activeVaults < sponsorSlots ? "ready" : "exhausted",
     fundingReason: activeVaults < sponsorSlots ? "ready" : "outstanding_liability",
+    observedLiabilityFri: input.liability.toString(),
   };
 }
 
@@ -202,7 +204,7 @@ export function applyLedgerCapacity(
   const active = snapshot.reservedCount + snapshot.submittedCount > 0;
   const projected = BigInt(snapshot.reservedTodayFri) + BigInt(snapshot.spentTodayFri) + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
   if (snapshot.sponsorshipFrozen || active || projected > dailyExitBudgetFri) {
-    return { status: "exhausted", reason: "ledger", fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+    return { ...chainCapacity, status: "exhausted", reason: "ledger", fundingStatus: "exhausted", fundingReason: "exit_capacity" };
   }
   if (snapshot.fundingAdmissionActive) {
     return { ...chainCapacity, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
@@ -211,11 +213,11 @@ export function applyLedgerCapacity(
 }
 
 function unknownCapacity(): ClaimCapacity {
-  return { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration" };
+  return { status: "unknown", reason: "configuration", fundingStatus: "unknown", fundingReason: "configuration", observedLiabilityFri: null };
 }
 
-function exhaustedCapacity(reason: "allowance" | "balance"): ClaimCapacity {
-  return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity" };
+function exhaustedCapacity(reason: "allowance" | "balance", liability: bigint): ClaimCapacity {
+  return { status: "exhausted", reason, fundingStatus: "exhausted", fundingReason: "exit_capacity", observedLiabilityFri: liability.toString() };
 }
 
 export function validatePreparedExitPayload(payload: string): ValidatedExit {
