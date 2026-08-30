@@ -99,11 +99,10 @@ export default {
               ignoredActiveFingerprint,
             );
             requireFundingAdmission(capacity);
-            const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
-            if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+            const ttlMs = fundingAdmissionTtlMs(env);
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
-              Number(ttlMs),
+              ttlMs,
               admissionToken,
             );
             if (!admission.acquired) throw new RelayHttpError(503, "funding_unavailable");
@@ -187,6 +186,7 @@ export default {
           }
           const bound = await budget.bindFundingAdmissionCheckpoint(
             Date.now(),
+            fundingAdmissionTtlMs(env),
             checkpointAdmissionToken,
             checkpoint.blockNumber,
             checkpoint.transactionIndex,
@@ -302,6 +302,16 @@ async function health(request: Request, env: Env): Promise<Response> {
 
 function isSubmissionEnabled(value: string): boolean {
   return value === "true";
+}
+
+function fundingAdmissionTtlMs(env: Env): number {
+  const ttlMs = parsePositiveDecimal(
+    env.FUNDING_ADMISSION_TTL_MS,
+    "funding_admission_ttl",
+    900_000n,
+  );
+  if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+  return Number(ttlMs);
 }
 
 export function requireFundingAdmission(capacity: Awaited<ReturnType<typeof readClaimCapacity>>): void {

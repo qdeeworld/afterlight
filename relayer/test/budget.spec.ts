@@ -124,26 +124,26 @@ describe("deployment-wide sponsorship coordinator", () => {
       active: true,
       expiresAtMs: 1_201_000,
     });
-    expect(await budget.bindFundingAdmissionCheckpoint(601_002, alternateOwner, 123, 4, "0x1c8")).toEqual({
+    expect(await budget.bindFundingAdmissionCheckpoint(601_002, 600_000, alternateOwner, 123, 4, "0x1c8")).toEqual({
       acquired: true,
       active: true,
-      expiresAtMs: 1_201_000,
+      expiresAtMs: 1_201_002,
     });
     expect(await budget.fundingAdmissionCheckpoint(601_003)).toEqual({ blockNumber: 123, transactionIndex: 4, transactionHash: "456" });
     expect(await budget.consumeFundingAdmission(601_003, 123, 4, "0x1c8", false)).toEqual({
       acquired: false,
       active: true,
-      expiresAtMs: 1_201_000,
+      expiresAtMs: 1_201_002,
     });
     expect(await budget.consumeFundingAdmission(601_004, 123, 4, "0x1c8", false)).toEqual({
       acquired: false,
       active: true,
-      expiresAtMs: 1_201_000,
+      expiresAtMs: 1_201_002,
     });
     expect(await budget.consumeFundingAdmission(601_005, 123, 4, "0x1c8", true)).toEqual({
       acquired: false,
       active: false,
-      expiresAtMs: 1_201_000,
+      expiresAtMs: 1_201_002,
     });
     expect((await budget.fundingAdmissionSnapshot(601_006)).active).toBe(false);
     expect(await budget.fundingAdmissionCheckpoint(601_006)).toBeNull();
@@ -152,12 +152,12 @@ describe("deployment-wide sponsorship coordinator", () => {
   it("cannot consume a newer admission with evidence sampled from an older checkpoint", async () => {
     const budget = freshBudget();
     await budget.acquireFundingAdmission(1_000, 600_000, owner);
-    await budget.bindFundingAdmissionCheckpoint(1_001, owner, 100, 1, "0x64");
+    await budget.bindFundingAdmissionCheckpoint(1_001, 600_000, owner, 100, 1, "0x64");
     const staleCursor = await budget.fundingAdmissionCheckpoint(1_002);
     expect(staleCursor).toEqual({ blockNumber: 100, transactionIndex: 1, transactionHash: "100" });
 
-    await budget.bindFundingAdmissionCheckpoint(1_003, owner, 101, 0, "0x65");
-    expect(await budget.bindFundingAdmissionCheckpoint(1_003, owner, 100, 1, "0x64")).toMatchObject({
+    await budget.bindFundingAdmissionCheckpoint(1_003, 600_000, owner, 101, 0, "0x65");
+    expect(await budget.bindFundingAdmissionCheckpoint(1_003, 600_000, owner, 100, 1, "0x64")).toMatchObject({
       acquired: true,
       active: true,
     });
@@ -179,7 +179,7 @@ describe("deployment-wide sponsorship coordinator", () => {
     });
 
     await budget.acquireFundingAdmission(601_000, 600_000, alternateOwner);
-    await budget.bindFundingAdmissionCheckpoint(601_001, alternateOwner, 200, 2, "0xc8");
+    await budget.bindFundingAdmissionCheckpoint(601_001, 600_000, alternateOwner, 200, 2, "0xc8");
     expect(await budget.consumeFundingAdmission(601_002, 100, 1, "0x64", true)).toMatchObject({
       active: true,
     });
@@ -193,12 +193,58 @@ describe("deployment-wide sponsorship coordinator", () => {
   it("keeps the latest same-block checkpoint when bind responses arrive in reverse order", async () => {
     const budget = freshBudget();
     await budget.acquireFundingAdmission(1_000, 600_000, owner);
-    await budget.bindFundingAdmissionCheckpoint(1_001, owner, 300, 8, "0x12c8");
-    await budget.bindFundingAdmissionCheckpoint(1_002, owner, 300, 7, "0x12c7");
+    await budget.bindFundingAdmissionCheckpoint(1_001, 600_000, owner, 300, 8, "0x12c8");
+    await budget.bindFundingAdmissionCheckpoint(1_002, 600_000, owner, 300, 7, "0x12c7");
     expect(await budget.fundingAdmissionCheckpoint(1_003)).toEqual({
       blockNumber: 300,
       transactionIndex: 8,
       transactionHash: BigInt("0x12c8").toString(),
+    });
+  });
+
+  it("extends an admission once canonical checkpoint inclusion is proven", async () => {
+    const budget = freshBudget();
+    await budget.acquireFundingAdmission(1_000, 600_000, owner);
+    expect(
+      await budget.bindFundingAdmissionCheckpoint(
+        600_000,
+        600_000,
+        owner,
+        400,
+        2,
+        "0x1902",
+      ),
+    ).toEqual({ acquired: true, active: true, expiresAtMs: 1_200_000 });
+    expect(await budget.acquireFundingAdmission(601_001, 600_000, alternateOwner)).toMatchObject({
+      acquired: false,
+      active: true,
+    });
+    expect(
+      await budget.bindFundingAdmissionCheckpoint(
+        700_000,
+        600_000,
+        owner,
+        400,
+        2,
+        "0x1902",
+      ),
+    ).toEqual({ acquired: true, active: true, expiresAtMs: 1_200_000 });
+
+    const expired = freshBudget();
+    await expired.acquireFundingAdmission(1_000, 600_000, owner);
+    expect(
+      await expired.bindFundingAdmissionCheckpoint(
+        601_000,
+        600_000,
+        owner,
+        401,
+        0,
+        "0x1910",
+      ),
+    ).toEqual({ acquired: false, active: false, expiresAtMs: null });
+    expect(await expired.acquireFundingAdmission(601_000, 600_000, alternateOwner)).toMatchObject({
+      acquired: true,
+      active: true,
     });
   });
 

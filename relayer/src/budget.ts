@@ -672,12 +672,16 @@ export class RelayBudget extends DurableObject<Env> {
 
   bindFundingAdmissionCheckpoint(
     nowMs: number,
+    ttlMs: number,
     ownerToken: string,
     checkpointBlock: number,
     checkpointTransactionIndex: number,
     checkpointTransactionHash: string,
   ): FundingAdmissionResult {
     const now = validTimestamp(nowMs);
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1 || ttlMs > 15 * 60_000) {
+      throw new BudgetError("invalid_budget_input");
+    }
     const owner = validKey(ownerToken);
     if (!Number.isSafeInteger(checkpointBlock) || checkpointBlock < 0) {
       throw new BudgetError("invalid_budget_input");
@@ -700,17 +704,27 @@ export class RelayBudget extends DurableObject<Env> {
         }
         const samePosition = checkpointBlock === current.checkpointBlock &&
           checkpointTransactionIndex === current.checkpointTransactionIndex;
-        if (samePosition && current.checkpointTransactionHash !== transactionHash) {
-          throw new BudgetError("idempotency_conflict");
+        if (samePosition) {
+          if (current.checkpointTransactionHash !== transactionHash) {
+            throw new BudgetError("idempotency_conflict");
+          }
+          return { acquired: true, active: true, expiresAtMs: current.expiresAtMs };
         }
       }
+      // Extend exactly once after canonical checkpoint inclusion is proven. The private
+      // FUND authorization was created before this public transaction, so the
+      // full admission TTL outlives both its remaining authorization window
+      // and the contract's shorter checkpoint-validity window. Exact receipt
+      // retries return above without lengthening the lease again.
+      const expiresAtMs = Math.max(current.expiresAtMs ?? 0, now + ttlMs);
       this.ctx.storage.sql.exec(
-        "UPDATE funding_admission SET checkpoint_marker = NULL, checkpoint_block = ?, checkpoint_tx_index = ?, checkpoint_tx_hash = ? WHERE singleton = 1",
+        "UPDATE funding_admission SET expires_at_ms = ?, checkpoint_marker = NULL, checkpoint_block = ?, checkpoint_tx_index = ?, checkpoint_tx_hash = ? WHERE singleton = 1",
+        expiresAtMs,
         checkpointBlock,
         checkpointTransactionIndex,
         transactionHash,
       );
-      return { acquired: true, active: true, expiresAtMs: current.expiresAtMs };
+      return { acquired: true, active: true, expiresAtMs };
     });
   }
 

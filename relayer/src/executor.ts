@@ -125,7 +125,7 @@ export interface BudgetCoordinator {
   snapshot(dayKey: string, budgetClass?: "control" | "exit"): Promise<BudgetSnapshot>;
   activeSnapshot(ignoredExactFingerprint?: string): Promise<ActiveBudgetSnapshot>;
   acquireFundingAdmission(nowMs: number, ttlMs: number, ownerToken: string): Promise<FundingAdmissionResult>;
-  bindFundingAdmissionCheckpoint(nowMs: number, ownerToken: string, checkpointBlock: number, checkpointTransactionIndex: number, checkpointTransactionHash: string): Promise<FundingAdmissionResult>;
+  bindFundingAdmissionCheckpoint(nowMs: number, ttlMs: number, ownerToken: string, checkpointBlock: number, checkpointTransactionIndex: number, checkpointTransactionHash: string): Promise<FundingAdmissionResult>;
   fundingAdmissionSnapshot(nowMs: number, ownerToken?: string): Promise<FundingAdmissionResult>;
   fundingAdmissionCheckpoint(nowMs: number): Promise<{ blockNumber: number; transactionIndex: number; transactionHash: string } | null>;
   consumeFundingAdmission(nowMs: number, observedCheckpointBlock: number, observedCheckpointTransactionIndex: number, observedCheckpointTransactionHash: string, fundedSinceCheckpoint: boolean): Promise<FundingAdmissionResult>;
