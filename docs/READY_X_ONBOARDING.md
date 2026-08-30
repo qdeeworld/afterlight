@@ -47,13 +47,13 @@ Application keys authorize Afterlight state transitions; they are not Ready
 accounts and do not own the destination note. Reusing an application key across
 vaults would create avoidable public correlation and is unsupported onboarding.
 
-The current client library can export a key only through the explicit
-`serializeBackup` confirmation and can restore it with `LocalStarkKey.restore`.
-That JSON contains the application private key and is **not encrypted by the
-library**. Treat it like a signing secret: encrypt it with a user-controlled
-method, store it offline, test restoration before funding, and never upload it
-to the relayer. The public UI labels this plaintext boundary and requires a
-successful local restore before it enables funding.
+The public client exports new application-key backups only after a password is
+entered and confirmed. The backup uses PBKDF2 with 600,000 SHA-256 iterations
+and AES-256-GCM authenticated encryption. Encryption and restoration happen in
+the browser; the password and decrypted key never reach the relayer. Store the
+file and password separately and test restoration before funding. Existing
+version 1 plaintext backups remain importable only for migration and must be
+replaced with the encrypted format before funding.
 
 ## Owner journey
 
@@ -69,8 +69,9 @@ successful local restore before it enables funding.
    must touch both the canonical STRK20 pool and the deployed Afterlight helper
    and must reconcile to one exact liability increase.
 7. While active, sign `HEARTBEAT` or `VETO` with the owner application key and
-   send only the bounded signed request to the neutral relayer. Do not submit
-   these controls from the ordinary owner Ready address.
+   use the neutral relay for the privacy-first route. If that relay is
+   unavailable, the explicit Ready X emergency route restores control but
+   publicly links the Ready address to the vault.
 8. To cancel, have Ready X prepare a new owner destination open note, bind the
    authorization to that exact note, token, amount, vault, epoch, and nonce,
    and privately execute `CANCEL_REFUND` through STRK20.

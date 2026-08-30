@@ -41,8 +41,21 @@ export function restoreKey(serialized: string): LocalStarkKey {
   return LocalStarkKey.restore(serialized);
 }
 
-export function exportKey(key: LocalStarkKey): string {
-  return key.serializeBackup(BACKUP_CONFIRMATION);
+export async function restoreEncryptedKey(serialized: string, password: string): Promise<LocalStarkKey> {
+  return LocalStarkKey.restoreEncrypted(serialized, password);
+}
+
+export async function exportEncryptedKey(key: LocalStarkKey, password: string): Promise<string> {
+  return key.serializeEncryptedBackup(BACKUP_CONFIRMATION, password);
+}
+
+export function isLegacyPlaintextKeyBackup(serialized: string): boolean {
+  try {
+    const parsed = JSON.parse(serialized) as { format?: unknown };
+    return parsed.format === "afterlight-stark-key-v1";
+  } catch {
+    return false;
+  }
 }
 
 export function freshVaultId(): string {
@@ -197,7 +210,12 @@ export async function fundRecoveryReserve(input: {
   };
 }
 
-export async function relayControl(operation: "HEARTBEAT" | "REQUEST" | "VETO", invitation: RecoveryInvitation, vault: VaultSnapshot, key: LocalStarkKey): Promise<string> {
+function prepareControlSubmission(
+  operation: "HEARTBEAT" | "REQUEST" | "VETO",
+  invitation: RecoveryInvitation,
+  vault: VaultSnapshot,
+  key: LocalStarkKey,
+): { payload: string; calldata: string[]; entrypoint: "heartbeat" | "request_recovery" | "veto" } {
   const expiry = validUntil();
   const owner = operation !== "REQUEST";
   const nonce = owner ? vault.ownerNonce : vault.successorNonce;
@@ -222,9 +240,15 @@ export async function relayControl(operation: "HEARTBEAT" | "REQUEST" | "VETO", 
   };
   // Keep this explicit serialization check beside the user action so frontend
   // and Cairo calldata cannot silently drift.
-  serializeControl(args);
+  const calldata = serializeControl(args);
   const relayOperation = operation === "HEARTBEAT" ? RelayOperation.Heartbeat : operation === "REQUEST" ? RelayOperation.Request : RelayOperation.Veto;
   const payload = encodeRelayRequest(buildRelayRequest(relayOperation, CONTRACT, args));
+  const entrypoint = operation === "HEARTBEAT" ? "heartbeat" : operation === "REQUEST" ? "request_recovery" : "veto";
+  return { payload, calldata, entrypoint };
+}
+
+export async function relayControl(operation: "HEARTBEAT" | "REQUEST" | "VETO", invitation: RecoveryInvitation, vault: VaultSnapshot, key: LocalStarkKey): Promise<string> {
+  const { payload } = prepareControlSubmission(operation, invitation, vault, key);
   const response = await fetch(`${RELAYER_URL}/v1/relay`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-afterlight-intent": "relay-control" },
@@ -236,6 +260,23 @@ export async function relayControl(operation: "HEARTBEAT" | "REQUEST" | "VETO", 
   const body = await response.json() as { status?: string; result?: { transactionHash?: string } };
   if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash) throw new Error("The neutral relay did not accept this authorization.");
   const transactionHash = num.toHex(BigInt(body.result.transactionHash));
+  await waitForSuccess(transactionHash);
+  return transactionHash;
+}
+
+export async function submitControlDirect(
+  operation: "HEARTBEAT" | "REQUEST" | "VETO",
+  invitation: RecoveryInvitation,
+  vault: VaultSnapshot,
+  key: LocalStarkKey,
+  ready: ReadySession,
+): Promise<string> {
+  const prepared = prepareControlSubmission(operation, invitation, vault, key);
+  const transactionHash = await ready.invokePublic([{
+    contractAddress: CONTRACT,
+    entrypoint: prepared.entrypoint,
+    calldata: prepared.calldata,
+  }]);
   await waitForSuccess(transactionHash);
   return transactionHash;
 }
@@ -341,44 +382,64 @@ export async function prepareExitPackage(input: {
 export async function submitExitPackage(
   exitPackage: Readonly<Record<string, unknown>>,
 ): Promise<{ transactionHash: string; actualFeeFri?: string }> {
-  const response = await fetch(`${RELAYER_URL}/v1/exit`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-afterlight-intent": "claim-exit",
-    },
-    body: JSON.stringify(exitPackage),
-    cache: "no-store",
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-  });
-  const body = await response.json() as {
+  type ExitResponse = {
     status?: string;
     code?: string;
-    result?: { status?: string; transactionHash?: string | null; actualFeeFri?: string };
+    result?: {
+      status?: string;
+      transactionHash?: string | null;
+      actualFeeFri?: string;
+      signedTransaction?: Readonly<Record<string, unknown>>;
+    };
   };
+
+  const post = async (mode: "prepare" | "reconcile"): Promise<{ response: Response; body: ExitResponse }> => {
+    const response = await fetch(`${RELAYER_URL}/v1/exit?mode=${mode}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-afterlight-intent": "claim-exit",
+      },
+      body: JSON.stringify(exitPackage),
+      cache: "no-store",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+    });
+    return { response, body: await response.json() as ExitResponse };
+  };
+
+  const prepared = await post("prepare");
+  if (
+    !prepared.response.ok ||
+    prepared.body.status !== "relayed" ||
+    prepared.body.result?.status !== "prepared" ||
+    !prepared.body.result.transactionHash ||
+    !prepared.body.result.signedTransaction
+  ) {
+    throw exitResponseError(prepared.body);
+  }
+  const expectedHash = num.toHex(BigInt(prepared.body.result.transactionHash));
+  try {
+    const broadcast = await provider.invokeSignedTx(
+      prepared.body.result.signedTransaction as Parameters<typeof provider.invokeSignedTx>[0],
+    );
+    if (num.toHex(BigInt(broadcast.transaction_hash)) !== expectedHash) {
+      throw new Error("The public RPC returned a different transaction hash.");
+    }
+  } catch {
+    // A transport failure can occur after the public RPC accepted the exact
+    // signed transaction. Receipt reconciliation below is authoritative and
+    // preserves the retained package for an exact retry.
+  }
+
+  const { response, body } = await post("reconcile");
   const hashlessRelayedResult = isHashlessRelayedResult(
     body.status,
     body.result?.status,
     body.result?.transactionHash,
   );
   if (!response.ok || body.status !== "relayed" || !body.result?.transactionHash) {
-    const reason = hashlessRelayedResult
-      ? "The neutral sponsor retained this exact private exit but has not returned its transaction hash. Reconcile this same package; do not prepare another exit."
-      : body.code === "exit_unavailable"
-      ? "The neutral private-exit sponsor is temporarily unavailable. No settlement was submitted."
-      : body.code === "exit_busy"
-        ? "A private exit is already being processed. Refresh the vault before trying again."
-      : body.code === "exit_reverted"
-          ? "The private exit was refused by the Afterlight contract. Refresh the vault state."
-          : body.code === "exit_uncertain"
-            ? "The private exit needs receipt reconciliation. Do not retry yet."
-            : "The exact-note private exit was rejected. No settlement was submitted.";
-    throw new ExitSubmissionError(
-      reason,
-      body.code,
-      hashlessRelayedResult || ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""),
-    );
+    throw exitResponseError(body, hashlessRelayedResult);
   }
   const transactionHash = num.toHex(BigInt(body.result.transactionHash));
   try {
@@ -397,6 +458,29 @@ export async function submitExitPackage(
     transactionHash,
     actualFeeFri: body.result.actualFeeFri,
   };
+}
+
+function exitResponseError(body: {
+  status?: string;
+  code?: string;
+  result?: { status?: string; transactionHash?: string | null };
+}, hashless = isHashlessRelayedResult(body.status, body.result?.status, body.result?.transactionHash)): ExitSubmissionError {
+  const reason = hashless
+    ? "The neutral sponsor retained this exact private exit but has not returned its transaction hash. Reconcile this same package; do not prepare another exit."
+    : body.code === "exit_unavailable"
+      ? "The neutral private-exit sponsor is temporarily unavailable. No settlement was submitted."
+      : body.code === "exit_busy"
+        ? "A private exit is already being processed. Refresh the vault before trying again."
+        : body.code === "exit_reverted"
+          ? "The private exit was refused by the Afterlight contract. Refresh the vault state."
+          : body.code === "exit_uncertain"
+            ? "The private exit needs receipt reconciliation. Do not retry yet."
+            : "The exact-note private exit was rejected. No settlement was submitted.";
+  return new ExitSubmissionError(
+    reason,
+    body.code,
+    hashless || ["exit_busy", "exit_uncertain", "internal_error"].includes(body.code ?? ""),
+  );
 }
 
 export class ExitSubmissionError extends Error {

@@ -77,13 +77,24 @@ held token balance >= existing locked liabilities + new fixed reserve
 
 Only the configured reserve becomes a vault liability. Donated surplus neither blocks funding nor creates a claim. Claim and cancellation reduce the liability exactly once; failed settlement reverts the state change.
 
-The public product also reads the sponsor's collapsed claim-capacity status.
-It disables new funding unless total liability is zero and one claim or cancellation is covered by the exact pool allowance,
-the bounded outer fee, and the post-spend health floor. The supported public route serializes one funding admission at a time. This is an availability
-guard, not an onchain authorization or per-vault capacity reservation: the deployed contract intentionally permits anyone to refresh its one-shot
-checkpoint, and multiple fully collateralized vault liabilities may exist. A caller bypassing the supported route cannot consume another vault's
-backing, but neither that caller nor an ordinary user is promised immediate neutral-sponsor capacity at a future exit. Claim and cancellation fail
-closed and may wait until the operator restores the exact allowance, balance, and daily budget. The contract and pool remain final.
+The public product reads the sponsor's collapsed claim-capacity status. New
+funding is admitted beside existing liabilities only when fee-aligned allowance,
+sponsor balance, the retained floor, the daily exit budget, reservations and
+leases conservatively cover every admitted vault. The policy caps admission at
+three outstanding vaults and still serializes one funding checkpoint and one
+neutral-account nonce operation at a time. A caller bypassing the supported
+route cannot consume another vault's backing or increase the service's promised
+capacity. Claim and cancellation fail closed when backing is insufficient. The
+contract and pool remain final.
+
+For private exits the Worker validates the exact note, proof, application
+signature, live state and fee bounds, signs the outer sponsor transaction, and
+persists its deterministic hash. It returns that signed transaction to the
+browser for independent public RPC broadcast, then reconciles the receipt. For
+heartbeat, request and veto the privacy-first route remains the neutral relay.
+An explicit Ready X emergency route can submit the same signed application
+authorization directly if availability is more important than hiding the Ready
+address.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or

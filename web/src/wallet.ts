@@ -1,5 +1,5 @@
 import { createStore } from "@starknet-io/get-starknet-discovery";
-import { WalletAccountV6, walletV6, num, type RpcProvider } from "starknet";
+import { WalletAccountV6, walletV6, num, type Call, type RpcProvider } from "starknet";
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
 import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
@@ -14,6 +14,7 @@ export interface ReadySession {
   chainId: string;
   balance(token: string): Promise<bigint>;
   invoke(actions: readonly STRK20_ACTION[]): Promise<string>;
+  invokePublic(calls: readonly Call[]): Promise<string>;
   prepare(actions: readonly STRK20_ACTION[], simulate: boolean): Promise<PreparedCallAndProof>;
   disconnect(): void;
 }
@@ -88,6 +89,12 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
       await assertFresh();
       const response = await account.strk20InvokeTransaction([...actions] as never);
       if (!response.transaction_hash) throw new Error("Ready did not return a transaction hash.");
+      return num.toHex(BigInt(response.transaction_hash));
+    },
+    invokePublic: async (calls) => {
+      await assertFresh();
+      const response = await account.execute([...calls]);
+      if (!response.transaction_hash) throw new Error("Ready did not return a public transaction hash.");
       return num.toHex(BigInt(response.transaction_hash));
     },
     prepare: async (actions, simulate) => {

@@ -98,7 +98,12 @@ h1 { margin: 0; max-width: 850px; font-family: Georgia, "Times New Roman", serif
 .restore-key { margin: 0; padding-top: 0; border-top: 0; }
 .restore-key summary, .invitation-editor summary { color: var(--accent-dark); font-size: .82rem; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
 .restore-key .full-field, .invitation-editor .full-field { margin-top: 14px; }
+.password-fields { display: grid; gap: 12px; margin-top: 14px; }
+.password-fields .full-field { margin-top: 0; }
 .secret-warning { padding: 13px 14px; border-left: 3px solid #a05b35; background: #fff3e8; }
+.emergency-fallback { margin-top: 14px; padding: 12px 14px; border: 1px solid #d7a184; border-radius: 10px; background: #fff8f2; }
+.emergency-fallback summary { min-height: 44px; color: #7d3f27; font-weight: 750; cursor: pointer; }
+.emergency-fallback p { color: var(--muted); font-size: .8rem; line-height: 1.5; }
 .secret-warning p, .warning, .success { margin: 4px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.5; }
 .success { color: var(--success); font-weight: 700; }
 .restore-reserve { margin: 0 0 18px; border: 1px solid var(--line); border-radius: 12px; background: rgb(255 255 255 / 45%); }
@@ -200,18 +205,19 @@ dialog .button-row { justify-content: flex-end; }
 
 @media (max-width: 620px) {
   .site-header { min-height: 68px; padding: 0 17px; }
-  .network { font-size: 0; }
+  .network { max-width: 112px; font-size: .68rem; line-height: 1.25; text-align: right; }
   main { padding: 30px 16px 60px; }
   h1 { font-size: clamp(2.55rem, 12vw, 3.35rem); }
   .intro > div:first-child > p:last-child { font-size: 1rem; }
-  .promise { display: none; }
+  .promise { grid-template-columns: 26px 1fr; gap: 11px 10px; padding: 18px 0 0; }
+  .promise p { padding-right: 0; }
   .role-tabs { width: 100%; margin-top: 28px; }
   .role-tabs button { min-width: 0; padding: 0 8px; font-size: .9rem; }
   .journey { padding: 25px 18px; border-radius: 14px; }
   .journey[data-role-view] { display: flex; flex-direction: column; }
   .journey[data-role-view] > * { order: 4; }
   .journey[data-role-view] > .journey-heading { order: 0; }
-  .journey[data-role-view] > .lede { display: none; }
+  .journey[data-role-view] > .lede { display: block; order: 0; margin-bottom: 22px; }
   .journey[data-role-view="owner"] > .wallet-row,
   .journey[data-role-view="successor"] > .key-panel { order: 1; }
   .journey[data-role-view] > .journey-progress { order: 2; }

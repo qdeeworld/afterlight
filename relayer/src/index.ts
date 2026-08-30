@@ -65,6 +65,13 @@ export default {
       let estimateOnly = false;
       let beforeExecutionAdmission: ((ignoredActiveFingerprint?: string) => Promise<void>) | undefined;
       if (url.pathname === EXIT_PATH) {
+        const exitMode = url.searchParams.get("mode");
+        if (
+          (exitMode !== null && exitMode !== "prepare" && exitMode !== "reconcile") ||
+          url.searchParams.size !== (exitMode === null ? 0 : 1)
+        ) {
+          throw new RelayHttpError(400, "invalid_query");
+        }
         requireExitHeaders(request, env);
         await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
@@ -74,7 +81,7 @@ export default {
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
         const result = await executePreparedExit(payload, env, budget, validated, async () => {
           await rateLimitValidatedExit(env, await exitRateLimitIdentity(validated.action, validated.metadata.vaultId));
-        });
+        }, exitMode === "prepare" ? "return_signed" : exitMode === "reconcile" ? "reconcile_only" : "broadcast");
         return jsonResponse({ status: "relayed", result }, 200, corsHeaders(requestOrigin));
       } else if (url.pathname === CHECKPOINT_PATH) {
         const admissionToken = await requireCheckpointHeaders(request, env);

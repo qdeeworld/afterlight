@@ -6,7 +6,7 @@ export type ExitPolicyResult = Readonly<{
 
 export type ValidatedExit = Readonly<{
   action: "CLAIM" | "CANCEL_REFUND";
-  actionPolicy: Readonly<{ requiredState: bigint; allowanceBeforeFri: bigint; allowanceAfterFri: bigint }>;
+  actionPolicy: Readonly<{ requiredState: bigint; finalState: bigint; roleNonceIndex: number; eventName: string; eventSelector: string }>;
   metadata: Readonly<{
     vaultId: string;
     expectedState: string;

@@ -165,6 +165,50 @@ test("backup restoration rejects extra fields and malformed scalars", () => {
   assert.throws(() => LocalStarkKey.restore("not-json"), /invalid Afterlight key backup JSON/);
 });
 
+test("encrypted application key backups require the password and authenticate every field", async () => {
+  const key = LocalStarkKey.generate();
+  const password = "correct horse battery staple";
+  const encrypted = await key.serializeEncryptedBackup(BACKUP_CONFIRMATION, password);
+  const envelope = JSON.parse(encrypted) as Record<string, unknown>;
+
+  assert.equal(envelope.format, "afterlight-stark-key-v2");
+  assert.equal(envelope.kdf, "PBKDF2-SHA256");
+  assert.equal(envelope.iterations, 600_000);
+  assert.equal(envelope.cipher, "AES-256-GCM");
+  assert.equal(envelope.public_key, key.publicKey);
+  assert.equal("private_key" in envelope, false);
+  assert.doesNotMatch(encrypted, /0x[0-9a-f]{64}/i);
+
+  const restored = await LocalStarkKey.restoreEncrypted(encrypted, password);
+  assert.equal(restored.publicKey, key.publicKey);
+  await assert.rejects(
+    LocalStarkKey.restoreEncrypted(encrypted, "wrong password value"),
+    /incorrect backup password or damaged backup/,
+  );
+
+  for (const field of ["salt", "iv", "public_key", "ciphertext"] as const) {
+    const tampered = { ...envelope };
+    if (field === "public_key") {
+      tampered[field] = LocalStarkKey.generate().publicKey;
+    } else {
+      const encoded = String(tampered[field]);
+      tampered[field] = `${encoded[0] === "A" ? "B" : "A"}${encoded.slice(1)}`;
+    }
+    await assert.rejects(
+      LocalStarkKey.restoreEncrypted(JSON.stringify(tampered), password),
+      /incorrect backup password|invalid encrypted backup|public key mismatch/,
+      field,
+    );
+  }
+
+  await assert.rejects(
+    key.serializeEncryptedBackup(BACKUP_CONFIRMATION, "too short"),
+    /between 12 and 256/,
+  );
+  restored.destroy();
+  key.destroy();
+});
+
 test("timestamps are truncated to Unix seconds", () => {
   assert.equal(unixSeconds(1_787_539_123_999), 1_787_539_123n);
   assert.throws(() => unixSeconds(-1), /non-negative/);

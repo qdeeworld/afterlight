@@ -35,7 +35,7 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 2. For a new environment, keep `SUBMIT_ENABLED=false`; deploy the Worker and Durable Object migration.
 3. Verify `/health` reports the intended submission state and collapsed claim-capacity state, while exposing no address, endpoint, exact balance, secret state, wallet, vault, or request identifier.
 4. Verify the configured-origin preflight and each route with empty or invalid requests only.
-5. Fund the bounded relayer account within the approved spike cap.
+5. Fund the bounded relayer account within the approved release cap.
 6. Install secrets, verify configuration readiness, and obtain fresh no-submit quotes.
 7. Enable submission only within the bounded production sponsorship policy.
 8. Run one checkpoint and one signed control canary; reconcile their hashes, exact calldata, sender, actual FRI fee, and Durable Object totals.
@@ -66,7 +66,7 @@ promotion; a green inert check is never production readiness evidence.
 Monitor through at least 2026-09-04:
 
 - `/health` availability and collapsed balance status;
-- `/health.claimCapacity`; stop supported-UI funding whenever `fundingStatus` is not `ready`. The browser checks this state and the checkpoint route freshly rechecks it immediately before atomically acquiring the deployment-wide ten-minute funding lease. The exact ready allowance is `12 STRK`, covering one claim or cancellation, and funding is ready only when observed total locked liability is zero, sponsorship is unfrozen, neither control nor exit has an active shared-nonce reservation, no funding lease is active, and the exit ledger can still reserve the full `7.5 STRK` ceiling that UTC day. The release pins the contract's `300`-second checkpoint age. An observed liability consumes the lease; abandonment rolls back only after ten minutes, when the checkpoint has already been stale for five minutes. This lease serializes the supported route but cannot authorize the permissionless contract checkpoint. Monitor for unexpected checkpoint and funding events; an externally created vault remains fully backed but its exit is queued until exact sponsor capacity is restored. After either exit, the remaining `6 STRK` allowance and same-day ledger spend intentionally exhaust capacity until a newly reviewed replenishment on a later UTC day.
+- `/health.claimCapacity`; stop supported-UI funding whenever `fundingStatus` is not `ready`. The browser checks this state and the checkpoint route freshly rechecks it immediately before atomically acquiring the deployment-wide ten-minute funding lease. Allowance must be positive, no more than `60 STRK`, and an exact multiple of the `6 STRK` pool fee. The service admits at most three outstanding `1 STRK` vaults, and only when current allowance, relayer balance, the `1 STRK` retained floor, and the `22.5 STRK` daily network-fee budget conservatively back every outstanding exit plus the proposed vault. One outstanding vault therefore consumes one backed slot instead of globally closing funding. Sponsorship must remain unfrozen, neither control nor exit may have an active shared-nonce reservation, and no funding lease may be active. The release pins the contract's `300`-second checkpoint age. An abandoned lease rolls back only after ten minutes, when the checkpoint is already stale. The lease serializes the supported checkpoint route but cannot authorize the permissionless contract checkpoint. Monitor unexpected checkpoint and funding events, every allowance decrement, every exit-budget reservation, and the remaining fully backed vault slots.
 - relayer public STRK balance below the configured threshold;
 - Durable Object sponsorship freeze state;
 - reservations remaining `RESERVED` or `SUBMITTED` beyond the receipt window;
@@ -76,8 +76,10 @@ Monitor through at least 2026-09-04:
 The completed bounded control lifecycle used two funding checkpoints plus
 `HEARTBEAT`, two `REQUEST` calls, and `VETO`. The current control-plane ceiling
 is `0.4 STRK` per call and `1.6 STRK` per UTC day. The exact-note exit has a
-separate `7.5 STRK` full resource-bounds ceiling, a separate exact `6 STRK`
-pool allowance, and a `1 STRK` post-spend balance floor. Replace any cap only
+separate `7.5 STRK` full resource-bounds ceiling, consumes exactly `6 STRK`
+of aligned pool allowance, and preserves a `1 STRK` post-spend balance floor.
+The current release limits total daily exit-fee exposure to `22.5 STRK`.
+Replace any cap only
 from fresh quotes; never enable exposure larger than the funded operational
 bound.
 

@@ -23,6 +23,7 @@ export const LOCKED_NEUTRAL_CLASS_HASH =
 export const LOCKED_AMOUNT_FRI = 1_000_000_000_000_000_000n;
 export const LOCKED_POOL_FEE_FRI = 6_000_000_000_000_000_000n;
 export const LOCKED_INITIAL_ALLOWANCE_FRI = 12_000_000_000_000_000_000n;
+export const LOCKED_MAX_POOL_ALLOWANCE_FRI = 60_000_000_000_000_000_000n;
 export const OPEN_NOTE_PACKED_VALUE = 1n << 128n;
 export const LOCKED_HEALTH_FLOOR_FRI = 1_000_000_000_000_000_000n;
 export const ABSOLUTE_NETWORK_CAP_PER_EXIT_FRI = 9_027_538_581_262_736_234n;
@@ -63,8 +64,6 @@ const ACTION_POLICY = Object.freeze({
     roleNonceIndex: 13,
     eventName: "VaultCancelled",
     eventSelector: VAULT_CANCELLED_SELECTOR,
-    allowanceBeforeFri: LOCKED_INITIAL_ALLOWANCE_FRI,
-    allowanceAfterFri: LOCKED_POOL_FEE_FRI,
   }),
   CLAIM: Object.freeze({
     discriminant: 2n,
@@ -73,8 +72,6 @@ const ACTION_POLICY = Object.freeze({
     roleNonceIndex: 14,
     eventName: "RecoveryClaimed",
     eventSelector: RECOVERY_CLAIMED_SELECTOR,
-    allowanceBeforeFri: LOCKED_INITIAL_ALLOWANCE_FRI,
-    allowanceAfterFri: LOCKED_POOL_FEE_FRI,
   }),
 });
 
@@ -338,6 +335,9 @@ export function validatePolicy(policy) {
   }
   if (strictDecimal(policy.initialPoolAllowanceFri, "initial_allowance") !== LOCKED_INITIAL_ALLOWANCE_FRI) {
     throw new Error("wrong_initial_allowance");
+  }
+  if (strictDecimal(policy.maxPoolAllowanceFri, "max_pool_allowance") !== LOCKED_MAX_POOL_ALLOWANCE_FRI) {
+    throw new Error("wrong_max_pool_allowance");
   }
   if (strictDecimal(policy.postSpendHealthFloorFri, "health_floor") < LOCKED_HEALTH_FLOOR_FRI) {
     throw new Error("health_floor_too_low");
@@ -636,12 +636,17 @@ export function validateAuthorizationInclusionWindow(
   return deadline - reference;
 }
 
-export function validateAllowanceForAction(action, allowance) {
+export function validateAllowanceForAction(action, allowance, maximum = LOCKED_MAX_POOL_ALLOWANCE_FRI) {
   const actionPolicy = ACTION_POLICY[action];
   if (!actionPolicy) throw new Error("unsupported_exit_action");
   const actual = integer(allowance, "allowance");
-  if (actual !== actionPolicy.allowanceBeforeFri) throw new Error("wrong_exact_pool_allowance");
-  return actionPolicy.allowanceAfterFri;
+  const cap = integer(maximum, "maximum_allowance");
+  if (
+    actual < LOCKED_POOL_FEE_FRI ||
+    actual > cap ||
+    actual % LOCKED_POOL_FEE_FRI !== 0n
+  ) throw new Error("wrong_bounded_pool_allowance");
+  return actual - LOCKED_POOL_FEE_FRI;
 }
 
 export function validateBalanceForExit(balance, resourceCap, healthFloor = LOCKED_HEALTH_FLOOR_FRI) {
@@ -875,7 +880,8 @@ export function verifyReceiptEvidence(input) {
   if (BigInt(before.lockedLiabilityFri) - BigInt(after.lockedLiabilityFri) !== LOCKED_AMOUNT_FRI) {
     throw new Error("liability_delta_mismatch");
   }
-  if (BigInt(before.allowanceFri) !== validated.actionPolicy.allowanceBeforeFri || BigInt(after.allowanceFri) !== validated.actionPolicy.allowanceAfterFri) {
+  const expectedAllowanceAfter = validateAllowanceForAction(validated.action, BigInt(before.allowanceFri));
+  if (BigInt(after.allowanceFri) !== expectedAllowanceAfter) {
     throw new Error("allowance_delta_mismatch");
   }
   if (

@@ -300,6 +300,26 @@ describe("Afterlight Phase A relay Worker", () => {
     expect(wrongOrigin.status).toBe(403);
   });
 
+  it.each([
+    "?mode=unknown",
+    "?mode=prepare&broadcast=true",
+    "?mode=reconcile&prepare=true",
+  ])("rejects an unsupported exit delivery query (%s)", async (query) => {
+    const response = await exports.default.fetch(
+      new Request(`https://relay.invalid/v1/exit${query}`, {
+        method: "POST",
+        headers: {
+          origin,
+          "content-type": "application/json",
+          "x-afterlight-intent": "claim-exit",
+        },
+        body: "{}",
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ status: "error", code: "invalid_query" });
+  });
+
   it("rate-limits exits by stable vault and action rather than variable package material", async () => {
     const claimA = await exitRateLimitIdentity("CLAIM", "0x00abc");
     const claimB = await exitRateLimitIdentity("CLAIM", "0xabc");

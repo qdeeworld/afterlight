@@ -67,14 +67,22 @@ reconciliation is `7 STRK -> 8 STRK`. Final video production remains pending.
 
 The public E3 lifecycle was founder-operated. An unrelated owner-successor E4
 completion is not claimed. After that lifecycle, the neutral sponsor allowance
-was deliberately restored to exactly `12 STRK`: enough for one bounded private
-exit under the supported UI policy. A successful claim or cancellation consumes
-`6 STRK` of that allowance and exhausts the route until a later, reviewed
-replenishment. Funding also fails closed whenever a liability, reservation,
-funding lease, daily-exit limit, sponsor-balance floor, or exact allowance check
-is not ready. This is a capacity-limited public drill, not an unattended or
-permissionless liveness guarantee; the relayer cannot forge or redirect a valid
-settlement, but it can delay one by censoring or going offline.
+was deliberately restored to exactly `12 STRK`. The hardened policy accepts a
+positive allowance only in exact `6 STRK` fee increments, caps it at `60 STRK`,
+and admits at most three outstanding vaults. New funding is allowed beside an
+existing isolated liability only when the current allowance, sponsor balance,
+retained floor, daily budget, reservation state and lease can conservatively
+cover every admitted exit. A successful claim or cancellation consumes exactly
+`6 STRK` of allowance.
+
+The sponsor returns the exact signed private-exit transaction to the browser,
+which broadcasts it through an independent public RPC and then asks the service
+to reconcile the receipt. Heartbeat, request and veto retain the privacy-first
+neutral route. A user can explicitly submit any of those controls from Ready X
+if the relay is unavailable, with a mandatory warning that this emergency route
+publicly links the Ready address to the vault. The relayer still provides gas
+sponsorship and signing availability, but it no longer has exclusive control of
+the final broadcast or the owner's control transaction.
 
 Historical identifiers such as the `spike-inline-56` compiler profile and the
 relayer's `phase-a` hostname are pinned release identifiers. They do not mean

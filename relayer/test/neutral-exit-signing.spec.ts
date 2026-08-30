@@ -16,7 +16,7 @@ import {
   validateAllowanceForAction,
   validatePreparedExitPackage,
 } from "../src/neutral-exit-policy.mjs";
-import { EXIT_POLICY, applyLedgerCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit, serializeSignedExitForStorage, validateStoredSignedExit } from "../src/exit-executor.js";
+import { EXIT_POLICY, applyLedgerCapacity, assessChainCapacity, classifyBroadcastFailure, executePreparedExit, reconcileSubmittedExit, serializeSignedExitForStorage, validateStoredSignedExit } from "../src/exit-executor.js";
 
 const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 const LOCKED_NEUTRAL_ADDRESS = "0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46";
@@ -73,12 +73,14 @@ describe("neutral exact-exit signing boundary", () => {
     expect(validatePreparedExitPackage(cancellation, EXIT_POLICY).action).toBe("CANCEL_REFUND");
   });
 
-  it("admits exactly one bounded claim or cancellation from the same replenished allowance", () => {
+  it("admits multiple bounded claims or cancellations while allowance remains fully fee aligned", () => {
     const readyAllowance = 12n * 10n ** 18n;
-    const exhaustedAllowance = 6n * 10n ** 18n;
-    expect(validateAllowanceForAction("CLAIM", readyAllowance)).toBe(exhaustedAllowance);
-    expect(validateAllowanceForAction("CANCEL_REFUND", readyAllowance)).toBe(exhaustedAllowance);
-    expect(() => validateAllowanceForAction("CLAIM", exhaustedAllowance)).toThrow(/wrong_exact_pool_allowance/);
+    const secondAllowance = 6n * 10n ** 18n;
+    expect(validateAllowanceForAction("CLAIM", readyAllowance)).toBe(secondAllowance);
+    expect(validateAllowanceForAction("CANCEL_REFUND", readyAllowance)).toBe(secondAllowance);
+    expect(validateAllowanceForAction("CLAIM", secondAllowance)).toBe(0n);
+    expect(() => validateAllowanceForAction("CLAIM", 5n * 10n ** 18n)).toThrow(/wrong_bounded_pool_allowance/);
+    expect(() => validateAllowanceForAction("CLAIM", 66n * 10n ** 18n)).toThrow(/wrong_bounded_pool_allowance/);
   });
 
   it("reports capacity exhausted when the sponsorship ledger cannot reserve a full exit", () => {
@@ -88,7 +90,6 @@ describe("neutral exact-exit signing boundary", () => {
     for (const unavailable of [
       { ...base, reservedTodayFri: "1", reservedCount: 1 },
       { ...base, submittedCount: 1 },
-      { ...base, spentTodayFri: "1" },
       { ...base, sponsorshipFrozen: true },
     ]) {
       expect(applyLedgerCapacity(ready, unavailable)).toMatchObject({
@@ -97,11 +98,47 @@ describe("neutral exact-exit signing boundary", () => {
         fundingStatus: "exhausted",
       });
     }
+    expect(applyLedgerCapacity(ready, { ...base, spentTodayFri: "1" })).toEqual(ready);
+    expect(applyLedgerCapacity(ready, { ...base, spentTodayFri: EXIT_POLICY.dailyExitBudgetFri })).toMatchObject({
+      status: "exhausted",
+      reason: "ledger",
+      fundingStatus: "exhausted",
+    });
     expect(applyLedgerCapacity(ready, { ...base, fundingAdmissionActive: true })).toEqual({
       status: "ready",
       reason: "ready",
       fundingStatus: "exhausted",
       fundingReason: "exit_capacity",
+    });
+  });
+
+  it("keeps later isolated vaults fundable while every admitted exit remains fully backed", () => {
+    const unit = 10n ** 18n;
+    const fundedForThree = {
+      allowance: 18n * unit,
+      balance: 42n * unit,
+      maxOutstandingVaults: 3n,
+    };
+    expect(assessChainCapacity({ ...fundedForThree, liability: 0n })).toMatchObject({
+      status: "ready",
+      fundingStatus: "ready",
+    });
+    expect(assessChainCapacity({ ...fundedForThree, liability: 1n * unit })).toMatchObject({
+      status: "ready",
+      fundingStatus: "ready",
+    });
+    expect(assessChainCapacity({ ...fundedForThree, liability: 2n * unit })).toMatchObject({
+      status: "ready",
+      fundingStatus: "ready",
+    });
+    expect(assessChainCapacity({ ...fundedForThree, liability: 3n * unit })).toEqual({
+      status: "ready",
+      reason: "ready",
+      fundingStatus: "exhausted",
+      fundingReason: "outstanding_liability",
+    });
+    expect(assessChainCapacity({ ...fundedForThree, liability: 4n * unit })).toMatchObject({
+      fundingStatus: "exhausted",
     });
   });
 

@@ -37,6 +37,9 @@ export const EXIT_POLICY = Object.freeze({
   fixedAmountFri: "1000000000000000000",
   poolFeeEachFri: "6000000000000000000",
   initialPoolAllowanceFri: "12000000000000000000",
+  maxPoolAllowanceFri: "60000000000000000000",
+  maxOutstandingVaults: "3",
+  dailyExitBudgetFri: "22500000000000000000",
   postSpendHealthFloorFri: "1000000000000000000",
   // The accepted E2 claim consumed about 2.832 STRK, while its full validated
   // resource-bounds reservation was 7.436710911292439270 STRK. Keep a narrow,
@@ -69,9 +72,10 @@ export class ExitExecutorError extends Error {
 }
 
 export type ExitResult = Readonly<{
-  status: "accepted" | "duplicate";
+  status: "accepted" | "duplicate" | "prepared";
   transactionHash: string | null;
   actualFeeFri?: string;
+  signedTransaction?: Readonly<Record<string, unknown>>;
 }>;
 
 export type ClaimCapacity = Readonly<{
@@ -120,20 +124,17 @@ export async function readClaimCapacity(
     const fee = BigInt(feeRaw[0] ?? -1);
     if (fee !== BigInt(EXIT_POLICY.poolFeeEachFri)) return unknownCapacity();
     const allowance = parseU256Result(allowanceRaw, "allowance");
-    if (allowance !== BigInt(EXIT_POLICY.initialPoolAllowanceFri)) return exhaustedCapacity("allowance");
     const balance = parseU256Result(balanceRaw, "balance");
-    const required = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri) + BigInt(EXIT_POLICY.postSpendHealthFloorFri);
-    if (balance < required) return exhaustedCapacity("balance");
     const liability = parseU256Result(liabilityRaw, "liability");
     if (liability !== 0n && budget !== undefined) {
-      // A nonzero exact contract liability is authoritative evidence that the
-      // admitted FUND consumed the one-shot checkpoint. Clear the operational
-      // lease; funding remains exhausted by the liability itself.
+      // Any liability increase proves the admitted FUND consumed the one-shot
+      // checkpoint. The lease can close without treating other isolated
+      // vaults as a global funding lock.
       await budget.consumeFundingAdmission(Date.now());
     }
-    const chainCapacity: ClaimCapacity = liability === 0n
-      ? { status: "ready", reason: "ready", fundingStatus: "ready", fundingReason: "ready" }
-      : { status: "ready", reason: "ready", fundingStatus: "exhausted", fundingReason: "outstanding_liability" };
+    const configuredVaultLimit = parseBoundedVaultLimit(env.MAX_OUTSTANDING_VAULTS);
+    const configuredDailyBudget = parseConfiguredDailyExitBudget(env.DAILY_EXIT_BUDGET_FRI);
+    const chainCapacity = assessChainCapacity({ allowance, balance, liability, maxOutstandingVaults: configuredVaultLimit });
     if (budget === undefined) return chainCapacity;
     const dayKey = new Date().toISOString().slice(0, 10);
     const fundingSnapshot = admissionOwner === undefined
@@ -150,10 +151,39 @@ export async function readClaimCapacity(
       submittedCount: activeLedger.submittedCount,
       sponsorshipFrozen: activeLedger.sponsorshipFrozen,
       fundingAdmissionActive: fundingAdmission.active,
-    });
+    }, configuredDailyBudget);
   } catch {
     return unknownCapacity();
   }
+}
+
+export function assessChainCapacity(input: Readonly<{
+  allowance: bigint;
+  balance: bigint;
+  liability: bigint;
+  maxOutstandingVaults: bigint;
+}>): ClaimCapacity {
+  const fee = BigInt(EXIT_POLICY.poolFeeEachFri);
+  const maxAllowance = BigInt(EXIT_POLICY.maxPoolAllowanceFri);
+  if (input.allowance < fee || input.allowance > maxAllowance || input.allowance % fee !== 0n) {
+    return exhaustedCapacity("allowance");
+  }
+  const fixedAmount = BigInt(EXIT_POLICY.fixedAmountFri);
+  if (input.liability < 0n || input.liability % fixedAmount !== 0n) return unknownCapacity();
+  const floor = BigInt(EXIT_POLICY.postSpendHealthFloorFri);
+  const perExitReserve = fee + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
+  if (input.balance < perExitReserve + floor) return exhaustedCapacity("balance");
+  const allowanceSlots = input.allowance / fee;
+  const balanceSlots = (input.balance - floor) / perExitReserve;
+  const sponsorSlots = minBigInt(allowanceSlots, balanceSlots, input.maxOutstandingVaults);
+  const activeVaults = input.liability / fixedAmount;
+  if (sponsorSlots === 0n) return exhaustedCapacity(balanceSlots === 0n ? "balance" : "allowance");
+  return {
+    status: "ready",
+    reason: "ready",
+    fundingStatus: activeVaults < sponsorSlots ? "ready" : "exhausted",
+    fundingReason: activeVaults < sponsorSlots ? "ready" : "outstanding_liability",
+  };
 }
 
 export function applyLedgerCapacity(
@@ -166,11 +196,12 @@ export function applyLedgerCapacity(
     sponsorshipFrozen: boolean;
     fundingAdmissionActive?: boolean;
   }>,
+  dailyExitBudgetFri: bigint = BigInt(EXIT_POLICY.dailyExitBudgetFri),
 ): ClaimCapacity {
   if (chainCapacity.status !== "ready") return chainCapacity;
   const active = snapshot.reservedCount + snapshot.submittedCount > 0;
   const projected = BigInt(snapshot.reservedTodayFri) + BigInt(snapshot.spentTodayFri) + BigInt(EXIT_POLICY.maxNetworkFeePerExitFri);
-  if (snapshot.sponsorshipFrozen || active || projected > BigInt(EXIT_POLICY.maxNetworkFeePerExitFri)) {
+  if (snapshot.sponsorshipFrozen || active || projected > dailyExitBudgetFri) {
     return { status: "exhausted", reason: "ledger", fundingStatus: "exhausted", fundingReason: "exit_capacity" };
   }
   if (snapshot.fundingAdmissionActive) {
@@ -203,6 +234,7 @@ export async function executePreparedExit(
   budget: BudgetCoordinator,
   prevalidated?: ValidatedExit,
   afterAuthenticated?: () => Promise<void>,
+  delivery: "broadcast" | "return_signed" | "reconcile_only" = "broadcast",
 ): Promise<ExitResult> {
   const validated = prevalidated ?? validatePreparedExitPayload(payload);
 
@@ -234,6 +266,16 @@ export async function executePreparedExit(
       prior.preparedPayload !== null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
+      if (delivery === "return_signed") {
+        const signedTransaction = parseStoredSignedExit(prior.preparedPayload);
+        validateStoredSignedExit(signedTransaction, validated, prior.transactionHash);
+        return { status: "prepared", transactionHash: prior.transactionHash, signedTransaction };
+      }
+      if (delivery === "reconcile_only") {
+        const signedTransaction = parseStoredSignedExit(prior.preparedPayload);
+        validateStoredSignedExit(signedTransaction, validated, prior.transactionHash);
+        return reconcileSubmittedExit(provider, budget, validated, prior.transactionHash);
+      }
       if (env.SUBMIT_ENABLED !== "true") {
         return { status: "duplicate", transactionHash: prior.transactionHash };
       }
@@ -274,6 +316,7 @@ export async function executePreparedExit(
       return { status: "duplicate", transactionHash: prior.transactionHash };
     }
   }
+  if (delivery === "reconcile_only") throw new ExitExecutorError("exit_unavailable");
   // The kill switch blocks every fresh signature and broadcast, but cannot
   // strand a transaction already recorded as SUBMITTED. Receipt-only
   // reconciliation above is safe while submission is disabled.
@@ -347,7 +390,7 @@ export async function executePreparedExit(
     exactFingerprint: validated.bindingSha256,
     maxFeeFri: networkCap.toString(),
     perCallCapFri: policy.networkCapFri.toString(),
-    dailyBudgetFri: policy.networkCapFri.toString(),
+    dailyBudgetFri: parseConfiguredDailyExitBudget(env.DAILY_EXIT_BUDGET_FRI).toString(),
     ownerToken,
     nowMs: Date.now(),
   }) : undefined;
@@ -401,6 +444,13 @@ export async function executePreparedExit(
     );
     if (prepared.outcome !== "prepared" && prepared.outcome !== "already_prepared") {
       throw new ExitExecutorError("exit_unavailable");
+    }
+    if (delivery === "return_signed") {
+      return {
+        status: "prepared",
+        transactionHash: expectedHash,
+        signedTransaction: parseStoredSignedExit(preparedPayload),
+      };
     }
     submissionStage = "broadcast";
     broadcastStarted = true;
@@ -587,6 +637,24 @@ async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blo
 }
 
 function hex(value: string | bigint): string { return `0x${BigInt(value).toString(16)}`; }
+
+function parseBoundedVaultLimit(value: string): bigint {
+  if (!/^[1-9][0-9]*$/.test(value)) throw new ExitExecutorError("exit_unavailable");
+  const parsed = BigInt(value);
+  if (parsed !== BigInt(EXIT_POLICY.maxOutstandingVaults)) throw new ExitExecutorError("exit_unavailable");
+  return parsed;
+}
+
+function parseConfiguredDailyExitBudget(value: string): bigint {
+  if (!/^[1-9][0-9]*$/.test(value)) throw new ExitExecutorError("exit_unavailable");
+  const parsed = BigInt(value);
+  if (parsed !== BigInt(EXIT_POLICY.dailyExitBudgetFri)) throw new ExitExecutorError("exit_unavailable");
+  return parsed;
+}
+
+function minBigInt(...values: bigint[]): bigint {
+  return values.reduce((minimum, value) => value < minimum ? value : minimum);
+}
 
 function readFee(value: unknown): string {
   if (typeof value === "object" && value !== null) {
