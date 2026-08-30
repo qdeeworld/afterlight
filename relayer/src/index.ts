@@ -100,7 +100,7 @@ export default {
             );
             requireFundingAdmission(capacity);
             const ttlMs = parsePositiveDecimal(env.FUNDING_ADMISSION_TTL_MS, "funding_admission_ttl", 900_000n);
-            if (ttlMs !== 300_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
+            if (ttlMs !== 600_000n) throw new RelayHttpError(503, "invalid_funding_admission_ttl");
             const admission = await budget.acquireFundingAdmission(
               Date.now(),
               Number(ttlMs),
