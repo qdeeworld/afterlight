@@ -25,19 +25,18 @@ jobs:
         run: |
           set -euo pipefail
           evidence_dir="$(mktemp -d)"
-          curl \
-            --fail-with-body \
-            --silent \
-            --show-error \
-            --retry 3 \
-            --retry-all-errors \
-            --connect-timeout 10 \
-            --max-time 20 \
-            --dump-header "$evidence_dir/headers" \
-            --output "$evidence_dir/body.json" \
-            "$HEALTH_URL"
-
-          jq -e '
+          healthy=0
+          for attempt in 1 2 3; do
+            if curl \
+              --fail-with-body \
+              --silent \
+              --show-error \
+              --connect-timeout 10 \
+              --max-time 20 \
+              --header "Origin: $APP_URL" \
+              --dump-header "$evidence_dir/headers" \
+              --output "$evidence_dir/body.json" \
+              "$HEALTH_URL" && jq -e '
             .status == "ok" and
             .service == "afterlight-neutral-relayer" and
             .schema == "afterlight-relay/1" and
@@ -52,9 +51,17 @@ jobs:
             .privacy.payloadLogging == false and
             .privacy.appKeysHeld == false and
             .privacy.walletAddressesRequired == false
-          ' "$evidence_dir/body.json"
+              ' "$evidence_dir/body.json" > /dev/null 2>&1; then
+              healthy=1
+              break
+            fi
+            sleep "$attempt"
+          done
+          test "$healthy" -eq 1
 
           grep -Eiq '^cache-control: no-store' "$evidence_dir/headers"
+          grep -Eiq "^access-control-allow-origin: $APP_URL" "$evidence_dir/headers"
+          grep -Eiq '^vary: Origin' "$evidence_dir/headers"
           grep -Eiq '^content-security-policy:.*default-src .none.' "$evidence_dir/headers"
           grep -Eiq '^x-content-type-options: nosniff' "$evidence_dir/headers"
 

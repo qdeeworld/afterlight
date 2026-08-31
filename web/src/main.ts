@@ -6,6 +6,7 @@ import { parseInvitation, stateName, type RecoveryInvitation, type Role, type Va
 import { connectReady, detectReady, type ReadySession } from "./wallet.ts";
 import { ExitSubmissionError, exportEncryptedKey, fundRecoveryReserve, generateKey, hasPendingCheckpointReconciliation, isLegacyPlaintextKeyBackup, prepareExitPackage, relayControl, restoreEncryptedKey, restoreKey, submitControlDirect, submitExitPackage } from "./operations.ts";
 import { isThemePreference, resolveTheme, type ThemePreference } from "./theme.ts";
+import { requestSponsorCapacity, type SponsorCapacity } from "./capacity.ts";
 import type { LocalStarkKey } from "../../client/src/keys.ts";
 
 const THEME_STORAGE_KEY = "afterlight:theme:v1";
@@ -107,25 +108,11 @@ let exitCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let fundingCapacity: "checking" | "ready" | "exhausted" | "unknown" = "checking";
 let reserveMode: "NORMAL" | "FAST_DEMO" = "NORMAL";
 
-async function refreshSponsorCapacity(): Promise<void> {
-  const response = await fetch(`${RELAYER_URL}/health`, {
-    cache: "no-store",
-    credentials: "omit",
-    referrerPolicy: "no-referrer",
-  });
-  const body = await response.json() as {
-    submission?: string;
-    claimCapacity?: { status?: string; fundingStatus?: string };
-  };
-  if (!response.ok || body.submission !== "enabled" || body.claimCapacity === undefined) {
-    throw new Error("The neutral sponsor capacity could not be verified. No wallet request was made.");
-  }
-  exitCapacity = body.claimCapacity.status === "ready"
-    ? "ready"
-    : body.claimCapacity.status === "exhausted" ? "exhausted" : "unknown";
-  fundingCapacity = body.claimCapacity.fundingStatus === "ready"
-    ? "ready"
-    : body.claimCapacity.fundingStatus === "exhausted" ? "exhausted" : "unknown";
+async function refreshSponsorCapacity(): Promise<SponsorCapacity> {
+  const capacity = await requestSponsorCapacity(`${RELAYER_URL}/health`);
+  exitCapacity = capacity.exit;
+  fundingCapacity = capacity.funding;
+  return capacity;
 }
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
@@ -274,7 +261,7 @@ function ownerView(): string {
       <aside class="cost-note"><strong>Exact private-wallet consequence</strong><p>Creating this reserve uses 1 STRK as recoverable principal plus Ready’s separate 6 STRK private-action fee. You will confirm one Ready X transaction. Neutral exit sponsorship is capacity-limited and rechecked later; recovery or cancellation waits if capacity must be restored.</p></aside>
       <label class="ack"><input name="cost-ack" type="checkbox" ${costAcknowledged ? "checked" : ""} /><span>I understand this action uses 7 STRK from my shielded balance.</span></label>
       <button class="button primary" type="submit" ${canFund ? "" : "disabled"}>${pendingFunding ? "Reconcile pending funding checkpoint" : fundingCapacity === "exhausted" ? "New reserves temporarily paused" : fundingCapacity === "checking" ? "Checking recovery capacity" : fundingCapacity === "unknown" ? "Recovery capacity unavailable" : !costAcknowledged ? "Confirm the 7 STRK cost to continue" : "Create and privately fund reserve"}</button>
-      ${pendingFunding ? `<p class="warning">This tab has an unresolved funding checkpoint. Continue only to reconcile that exact attempt; the Worker still performs the authoritative owner-aware capacity check.</p>` : fundingCapacity === "exhausted" ? `<p class="error">Every fully backed vault slot is currently occupied or private-exit capacity needs replenishment. Existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p>` : ""}
+      ${pendingFunding ? `<p class="warning">This tab has an unresolved funding checkpoint. Continue only to reconcile that exact attempt; the Worker still performs the authoritative owner-aware capacity check.</p>` : fundingCapacity === "exhausted" ? `<p class="error">Every fully backed vault slot is currently occupied or private-exit capacity needs replenishment. Existing vault controls remain available.</p>` : fundingCapacity === "unknown" ? `<div class="capacity-recovery"><p class="error">Recovery capacity could not be verified. Funding stays disabled to protect users.</p><button class="button secondary" type="button" data-action="refresh-capacity" ${busy ? "disabled" : ""}>Check capacity again</button></div>` : ""}
       ${privateBalance !== undefined && privateBalance < 7n * 10n ** 18n ? `<p class="error">At least 7 private STRK is required for this action.</p>` : ""}
       ${applicationKey && backupState !== "verified" ? `<p class="error">Download and restore the owner key backup before funding.</p>` : ""}
     </form>
@@ -301,6 +288,12 @@ function invitationPanel(parsed: ReturnType<typeof parseInvitation>): string {
   }
   const timing = parsed.invitation.mode === "NORMAL" ? "30 days + 7 days" : "5 + 5 min drill";
   return `<section class="invitation-panel verified"><div class="section-heading"><span class="step-number">02</span><div><strong>Invitation verified</strong><p>Contract, designated key and recovery terms match Afterlight Mainnet.</p></div><span class="verified-mark">Verified</span></div><div class="invitation-facts"><span><small>Vault</small><strong>${short(parsed.invitation.vaultId)}</strong></span><span><small>Reserve</small><strong>1 STRK</strong></span><span><small>Timing</small><strong>${timing}</strong></span></div><details class="invitation-editor"><summary>Replace invitation</summary>${editor}</details></section>`;
+}
+
+function capacityRetryButton(): string {
+  return exitCapacity === "unknown"
+    ? `<button class="button secondary" type="button" data-action="refresh-capacity" ${busy ? "disabled" : ""}>Check capacity again</button>`
+    : "";
 }
 
 function formatDeadline(unixSeconds: number): string {
@@ -339,10 +332,10 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
     ${pendingCancellation ? `<button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private return</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
     ${pendingClaim ? `<button class="button primary" data-action="claim" ${!applicationKey || !ready || busy ? "disabled" : ""}>Reconcile pending private recovery</button><p class="warning">This reuses the exact retained note and authorization; it does not prepare another exit.</p>` : ""}
-    ${role === "owner" && current === "ACTIVE" && !pendingCancellation ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Record relayed heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || exitCapacity !== "ready" || busy ? "disabled" : ""}>Cancel and return 1 STRK privately</button>${exitCapacity !== "ready" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${role === "owner" && current === "ACTIVE" && !pendingCancellation ? `<button class="button primary" data-control="HEARTBEAT" ${!applicationKey || busy ? "disabled" : ""}>Record relayed heartbeat</button><button class="button danger" data-action="cancel-refund" ${!applicationKey || !ready || exitCapacity !== "ready" || busy ? "disabled" : ""}>Cancel and return 1 STRK privately</button>${exitCapacity !== "ready" ? `<p class="error">Private cancellation is paused until sponsor exit capacity is restored.</p>${capacityRetryButton()}` : ""}` : ""}
     ${role === "owner" && current === "GRACE" ? `<button class="button primary" data-control="VETO" ${!applicationKey || busy ? "disabled" : ""}>Veto recovery</button>` : ""}
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!applicationKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
-    ${role === "successor" && current === "GRACE" && !pendingClaim ? `<button class="button primary" ${claimReady && ready && applicationKey && exitCapacity === "ready" ? "" : "disabled"} data-action="claim">${exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>` : ""}` : ""}
+    ${role === "successor" && current === "GRACE" && !pendingClaim ? `<button class="button primary" ${claimReady && ready && applicationKey && exitCapacity === "ready" ? "" : "disabled"} data-action="claim">${exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>${capacityRetryButton()}` : ""}` : ""}
     <p class="action-help">Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
     ${emergencyOperation ? `<details class="emergency-fallback"><summary>Emergency wallet submission</summary><p>This restores control if the neutral relayer is unavailable, but it publicly links this Ready wallet address to the vault. Use it only when availability matters more than unlinkability.</p><button class="button danger" data-direct-control="${emergencyOperation}" ${!applicationKey || !ready || busy ? "disabled" : ""}>Submit ${emergencyOperation.toLowerCase()} from Ready X publicly</button></details>` : ""}
   </section>`;
@@ -425,6 +418,22 @@ function bindEvents(): void {
     walletStatus = "connected";
     notice = `Ready X connected. Private balance: ${strk(privateBalance)}.`;
   }));
+  document.querySelectorAll<HTMLButtonElement>("[data-action=refresh-capacity]").forEach((button) => button.addEventListener("click", () => void run(async () => {
+    exitCapacity = "checking";
+    fundingCapacity = "checking";
+    notice = "Checking neutral recovery capacity again…";
+    render();
+    try {
+      const capacity = await refreshSponsorCapacity();
+      notice = capacity.funding === "ready"
+        ? "Recovery capacity is ready. No wallet request was made."
+        : "Recovery capacity is currently occupied. Existing vault controls remain available.";
+    } catch {
+      exitCapacity = "unknown";
+      fundingCapacity = "unknown";
+      notice = "Recovery capacity could not be verified. No wallet request was made; try again shortly.";
+    }
+  })));
   document.querySelector<HTMLButtonElement>("[data-action=generate-key]")?.addEventListener("click", () => {
     applicationKey?.destroy();
     applicationKey = generateKey();
