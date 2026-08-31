@@ -63,7 +63,8 @@ wallet's post-finality
 reconciliation is `6 STRK -> 7 STRK`: the exact `+1 STRK` recovery output was
 added to the beneficiary while the neutral sponsor paid the separate `6 STRK`
 pool fee. The public E3 vault is also `CLAIMED`; its immediate Ready X
-reconciliation is `7 STRK -> 8 STRK`. Final video production remains pending.
+reconciliation is `7 STRK -> 8 STRK`. The verified final demo is available on
+[YouTube](https://youtu.be/doPd4wyuODc).
 
 The public E3 lifecycle was founder-operated. An unrelated owner-successor E4
 completion is not claimed. After that lifecycle, the neutral sponsor allowance
