@@ -27,10 +27,11 @@ then-current account, registration, protocol-fee, and gas route. Fees and
 account state must be freshly quoted in Ready X; this document deliberately
 does not present an old estimate as a funding instruction.
 
-The public app requires Ready X `5.33.9` or a later compatible Ready `5.x`
-release and verifies the Wallet API capabilities it uses. An incompatible
-major release fails closed with the detected version instead of silently
-attempting a transaction.
+The public app requires the Ready X desktop browser extension at `5.33.9` or a
+later compatible Ready `5.x` release and verifies the Wallet API capabilities
+it uses. Mobile Ready and Braavos do not expose the STRK20 browser API required
+by this release. An incompatible major release fails closed with the detected
+version instead of silently attempting a transaction.
 
 Keep the Ready account key, the Afterlight application key, and destination
 note material separate. Never paste a Ready seed or private key into Afterlight,
@@ -63,8 +64,10 @@ replaced with the encrypted format before funding.
 3. Receive only the successor's fresh per-vault public key.
 4. Choose a permitted vault mode, fixed denomination, inactivity interval, and
    grace interval.
-5. Save the vault/recovery package and verify that the application-key backup
-   can be imported before moving value.
+5. Verify that the application-key backup can be imported before moving value.
+   After the neutral checkpoint succeeds, the browser saves the exact recovery
+   invitation locally before Ready X can accept the private funding action. It
+   downloads the same invitation as JSON after Mainnet confirmation.
 6. Review and confirm the Ready X private `FUND` action. A successful receipt
    must touch both the canonical STRK20 pool and the deployed Afterlight helper
    and must reconcile to one exact liability increase.
@@ -80,7 +83,8 @@ replaced with the encrypted format before funding.
 
 1. Generate and back up a fresh successor application key on the successor's
    own device; share only its public key with the owner.
-2. Import the vault package and connect the separate successor Ready X account.
+2. Import the invitation JSON file (or paste its contents), verify the live
+   Mainnet vault and terms, then connect the separate successor Ready X account.
 3. After no authenticated heartbeat has arrived for the configured interval,
    sign `REQUEST` with the successor application key and send the bounded signed
    request through the neutral relayer. The contract, not the relayer, decides

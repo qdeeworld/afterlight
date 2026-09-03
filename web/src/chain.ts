@@ -1,5 +1,6 @@
 import { RpcProvider, num } from "starknet";
 import { CHAIN_ID, CONTRACT, RPC_URL, STRK } from "./config.ts";
+import { classifyTransactionOutcome, type TransactionOutcome } from "./funding-attempt.ts";
 import type { VaultSnapshot } from "./model.ts";
 
 export const provider = new RpcProvider({ nodeUrl: RPC_URL });
@@ -45,6 +46,24 @@ export async function readVault(vaultId: string): Promise<VaultSnapshot> {
 export async function readLiability(): Promise<bigint> {
   const raw = await provider.callContract({ contractAddress: CONTRACT, entrypoint: "get_locked_by_token", calldata: [STRK] });
   return BigInt(raw[0] ?? 0) + (BigInt(raw[1] ?? 0) << 128n);
+}
+
+export async function readTransactionOutcome(transactionHash: string): Promise<TransactionOutcome> {
+  try {
+    const receipt = await provider.getTransactionReceipt(transactionHash);
+    const value = receipt.value as unknown as Record<string, unknown>;
+    const outcome = classifyTransactionOutcome(value.execution_status, value.finality_status);
+    if (outcome !== "unknown") return outcome;
+  } catch {
+    // A recently submitted transaction may not have propagated to this RPC yet.
+  }
+  try {
+    const status = await provider.getTransactionStatus(transactionHash) as unknown as Record<string, unknown>;
+    return classifyTransactionOutcome(status.execution_status, status.finality_status);
+  } catch {
+    // A missing or unavailable status is ambiguous and must retain the attempt.
+  }
+  return "unknown";
 }
 
 export async function waitForSuccess(transactionHash: string): Promise<void> {

@@ -3,7 +3,7 @@ import { WalletAccountV6, walletV6, num, type Call, type RpcProvider } from "sta
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
 import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
-import { isCompatibleReadyVersion } from "./compatibility.ts";
+import { isCompatibleReadyVersion, isRecognizedReadyName } from "./compatibility.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -26,19 +26,26 @@ function walletFeature(wallet: ReadyWallet): { walletVersion?: unknown; request?
 }
 
 export function detectReady(): { found: boolean; version?: string } {
-  const wallet = findReady();
+  const wallet = findReady(false);
   const feature = wallet ? walletFeature(wallet) : undefined;
   return wallet && typeof feature?.request === "function"
     ? { found: true, version: String(feature.walletVersion ?? "") }
     : { found: false };
 }
 
-function findReady(): ReadyWallet | undefined {
-  return store.getWallets().find((wallet) => /^(?:ready|readyx)$/i.test(wallet.name.replace(/[^a-z0-9]/gi, "")));
+function findReady(refreshIfMissing: boolean): ReadyWallet | undefined {
+  // Some extension builds still use the legacy Argent X identity, while newer
+  // releases register as Ready, Ready X, or Ready Wallet. Refresh only after
+  // an explicit connection attempt so ordinary renders do not repeatedly wrap
+  // unrelated late-injected providers and attach redundant event listeners.
+  const discovered = store.getWallets().find((wallet) => isRecognizedReadyName(wallet.name));
+  if (discovered || !refreshIfMissing) return discovered;
+  store._refreshInjectedWallets();
+  return store.getWallets().find((wallet) => isRecognizedReadyName(wallet.name));
 }
 
 export async function connectReady(provider: RpcProvider, onChanged: () => void): Promise<ReadySession> {
-  const wallet = findReady();
+  const wallet = findReady(true);
   if (!wallet) throw new Error("Ready X was not detected in this browser profile.");
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
