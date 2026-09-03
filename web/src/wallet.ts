@@ -3,7 +3,7 @@ import { WalletAccountV6, walletV6, num, type Call, type RpcProvider } from "sta
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
 import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
-import { isCompatibleReadyVersion } from "./compatibility.ts";
+import { isCompatibleReadyVersion, isRecognizedReadyName, isUsableReadyProvider } from "./compatibility.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -26,20 +26,44 @@ function walletFeature(wallet: ReadyWallet): { walletVersion?: unknown; request?
 }
 
 export function detectReady(): { found: boolean; version?: string } {
-  const wallet = findReady();
+  const wallets = store.getWallets();
+  const wallet = findUsableReady(wallets)
+    ?? wallets.find((candidate) => isRecognizedReadyName(candidate.name) && typeof walletFeature(candidate)?.request === "function")
+    ?? wallets.find((candidate) => isRecognizedReadyName(candidate.name));
   const feature = wallet ? walletFeature(wallet) : undefined;
   return wallet && typeof feature?.request === "function"
     ? { found: true, version: String(feature.walletVersion ?? "") }
     : { found: false };
 }
 
-function findReady(): ReadyWallet | undefined {
-  return store.getWallets().find((wallet) => /^(?:ready|readyx)$/i.test(wallet.name.replace(/[^a-z0-9]/gi, "")));
+function findUsableReady(wallets: readonly ReadyWallet[]): ReadyWallet | undefined {
+  return wallets.find((wallet) => {
+    const feature = walletFeature(wallet);
+    return isUsableReadyProvider(wallet.name, feature?.walletVersion, feature?.request);
+  });
+}
+
+function findReady(refreshIfMissing: boolean): ReadyWallet | undefined {
+  // Some extension builds still use the legacy Argent X identity, while newer
+  // releases register as Ready, Ready X, or Ready Wallet. Refresh only after
+  // an explicit connection attempt so ordinary renders do not repeatedly wrap
+  // unrelated late-injected providers and attach redundant event listeners.
+  const discovered = findUsableReady(store.getWallets());
+  if (discovered || !refreshIfMissing) return discovered;
+  store._refreshInjectedWallets();
+  return findUsableReady(store.getWallets());
 }
 
 export async function connectReady(provider: RpcProvider, onChanged: () => void): Promise<ReadySession> {
-  const wallet = findReady();
-  if (!wallet) throw new Error("Ready X was not detected in this browser profile.");
+  const wallet = findReady(true);
+  if (!wallet) {
+    const recognized = store.getWallets().filter((candidate) => isRecognizedReadyName(candidate.name));
+    const withApi = recognized.filter((candidate) => typeof walletFeature(candidate)?.request === "function");
+    if (recognized.length === 0) throw new Error("Ready X was not detected in this browser profile.");
+    if (withApi.length === 0) throw new Error("The detected Ready wallet does not expose its Wallet API.");
+    const versions = [...new Set(withApi.map((candidate) => String(walletFeature(candidate)?.walletVersion ?? "unknown")))];
+    throw new Error(`Ready X ${READY_MIN_VERSION} or a compatible Ready 5.x release is required; detected ${versions.join(", ")}.`);
+  }
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
   if (!isCompatibleReadyVersion(feature.walletVersion)) throw new Error(`Ready X ${READY_MIN_VERSION} or a compatible Ready 5.x release is required; detected ${String(feature.walletVersion)}.`);

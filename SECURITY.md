@@ -1,7 +1,7 @@
 # Security policy
 
 Please report suspected vulnerabilities privately through
-[GitHub's security-advisory form](https://github.com/dolepee/afterlight/security/advisories/new).
+[GitHub's security-advisory form](https://github.com/qdeeworld/afterlight/security/advisories/new).
 Do not open a public issue for an undisclosed vulnerability and do not include
 wallet seeds, private keys, application-key backups, proof material, or other
 secrets in a report.

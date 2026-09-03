@@ -1,5 +1,24 @@
 import { READY_MIN_VERSION } from "./config.ts";
 
+const READY_WALLET_NAMES = new Set([
+  "ready",
+  "readyx",
+  "readywallet",
+  "argentx",
+  "argentxwallet",
+]);
+
+export function isRecognizedReadyName(value: unknown): boolean {
+  const normalized = String(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+  return READY_WALLET_NAMES.has(normalized);
+}
+
+export function isUsableReadyProvider(name: unknown, version: unknown, request: unknown): boolean {
+  return isRecognizedReadyName(name)
+    && typeof request === "function"
+    && isCompatibleReadyVersion(version);
+}
+
 export function isCompatibleReadyVersion(value: unknown): boolean {
   const match = /^(\d+)\.(\d+)\.(\d+)([-+].*)?$/.exec(String(value));
   if (!match) return false;

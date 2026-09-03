@@ -32,6 +32,7 @@ import type { ReadySession } from "./wallet.ts";
 import { TransactionExecutionError, waitForSuccess } from "./chain.ts";
 import { provider } from "./chain.ts";
 import { isHashlessRelayedResult, isRetryableCheckpointCode } from "./checkpoint-policy.ts";
+import { executeFundingSequence } from "./funding-attempt.ts";
 
 export function generateKey(): LocalStarkKey {
   return LocalStarkKey.generate();
@@ -158,6 +159,7 @@ export async function fundRecoveryReserve(input: {
   successorKey: string;
   mode: "NORMAL" | "FAST_DEMO";
   onCheckpoint?: (hash: string) => void;
+  onPrepared?: (invitation: RecoveryInvitation) => void;
   onSubmitted?: (hash: string) => void;
 }): Promise<{ invitation: RecoveryInvitation; transactionHash: string }> {
   const vaultId = freshVaultId();
@@ -187,26 +189,33 @@ export async function fundRecoveryReserve(input: {
     valid_until: expiry,
     ...signature,
   });
-  const checkpointHash = await checkpoint();
-  input.onCheckpoint?.(checkpointHash);
-  const transactionHash = await input.ready.invoke(actions);
-  input.onSubmitted?.(transactionHash);
-  await waitForSuccess(transactionHash);
+  const invitation: RecoveryInvitation = {
+    version: 1,
+    chain: "SN_MAIN",
+    contract: CONTRACT,
+    vaultId,
+    ownerKey: input.ownerKey.publicKey,
+    successorKey: num.toHex(BigInt(input.successorKey)),
+    token: "STRK",
+    amount: "1",
+    mode: input.mode,
+    inactivitySeconds,
+    graceSeconds,
+  };
+  // Persist the exact recovery identity after the neutral checkpoint but before
+  // Ready can accept value movement, then retain the returned hash until finality.
+  const transactionHash = await executeFundingSequence({
+    invitation,
+    checkpoint,
+    invoke: () => input.ready.invoke(actions),
+    waitForSuccess,
+    onCheckpoint: input.onCheckpoint,
+    onPrepared: input.onPrepared,
+    onSubmitted: input.onSubmitted,
+  });
   return {
     transactionHash,
-    invitation: {
-      version: 1,
-      chain: "SN_MAIN",
-      contract: CONTRACT,
-      vaultId,
-      ownerKey: input.ownerKey.publicKey,
-      successorKey: num.toHex(BigInt(input.successorKey)),
-      token: "STRK",
-      amount: "1",
-      mode: input.mode,
-      inactivitySeconds,
-      graceSeconds,
-    },
+    invitation,
   };
 }
 
