@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CONTRACT, STRK } from "../src/config.ts";
 import { isHashlessRelayedResult, isRetryableCheckpointCode } from "../src/checkpoint-policy.ts";
-import { isCompatibleReadyVersion, isRecognizedReadyName } from "../src/compatibility.ts";
+import { isCompatibleReadyVersion, isRecognizedReadyName, isUsableReadyProvider } from "../src/compatibility.ts";
 import { classifyTransactionOutcome, executeFundingSequence, isExplicitWalletRejection, parsePendingFundingAttempt, withAvailableExclusiveLock, type AvailableLockManager } from "../src/funding-attempt.ts";
 import { parseInvitation, type RecoveryInvitation, type VaultSnapshot } from "../src/model.ts";
 import { assertInvitationMatchesVault, bindVerifiedVault, snapshotForInvitation } from "../src/vault-verification.ts";
@@ -35,6 +35,16 @@ describe("public product compatibility", () => {
 
   it.each(["5.33.8", "5.33.9-beta.1", "4.99.0", "6.0.0", "latest", ""])("rejects incompatible Ready %s", (version) => {
     expect(isCompatibleReadyVersion(version)).toBe(false);
+  });
+
+  it("selects a compatible Ready provider after an incompatible legacy match", () => {
+    const providers = [
+      { name: "Argent X", version: "5.20.0", request: () => undefined },
+      { name: "Ready X", version: "5.33.9", request: () => undefined },
+    ];
+    expect(providers.find((provider) => isUsableReadyProvider(provider.name, provider.version, provider.request)))
+      .toBe(providers[1]);
+    expect(isUsableReadyProvider("Ready X", "5.33.9", undefined)).toBe(false);
   });
 
   it("accepts the exact NORMAL terms exposed as the canonical product", () => {

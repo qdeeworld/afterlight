@@ -13,6 +13,12 @@ export function isRecognizedReadyName(value: unknown): boolean {
   return READY_WALLET_NAMES.has(normalized);
 }
 
+export function isUsableReadyProvider(name: unknown, version: unknown, request: unknown): boolean {
+  return isRecognizedReadyName(name)
+    && typeof request === "function"
+    && isCompatibleReadyVersion(version);
+}
+
 export function isCompatibleReadyVersion(value: unknown): boolean {
   const match = /^(\d+)\.(\d+)\.(\d+)([-+].*)?$/.exec(String(value));
   if (!match) return false;
