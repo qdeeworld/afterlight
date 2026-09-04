@@ -288,7 +288,11 @@ function validatePreparedExit(
     parsed.actions.length !== exactVariants.length ||
     parsed.actions.some((action, index) => action.variant !== exactVariants[index])
   ) {
-    throw new Error("prepared exit must contain exactly WriteOnce, EmitOpenNoteCreated, Invoke");
+    // Report discriminants only: never include calldata, note IDs, or proof material.
+    const variants = parsed.actions.slice(0, 24).map((action) => action.variant.toString()).join(", ");
+    throw new Error(
+      `prepared exit must contain exactly WriteOnce, EmitOpenNoteCreated, Invoke; received ${parsed.actions.length} action(s), types [${variants}${parsed.actions.length > 24 ? ", …" : ""}] (expected [0, 7, 10]). No claim was submitted.`,
+    );
   }
   if (parsed.writeOnceActions.length !== 1) {
     throw new Error(`expected one prepared note WriteOnce, found ${parsed.writeOnceActions.length}`);

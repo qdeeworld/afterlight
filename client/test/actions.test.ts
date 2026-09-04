@@ -543,7 +543,14 @@ test("prepared exits require the exact source-faithful open-note action shape", 
           PrivateAction.Claim,
           exit,
         ),
-      /must contain exactly/,
+      (error: unknown) => {
+        assert.ok(error instanceof Error);
+        assert.match(error.message, /must contain exactly/);
+        assert.match(error.message, /received 4 action\(s\), types \[0, 7, [01], 10\]/);
+        assert.ok(!error.message.includes("0xdeadbeef"));
+        assert.ok(!error.message.includes("0xcafe"));
+        return true;
+      },
     );
   }
 

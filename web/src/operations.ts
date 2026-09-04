@@ -333,7 +333,15 @@ export async function prepareExitPackage(input: {
   const actionBuilder = cancel ? buildCancelRefundActions : buildClaimActions;
   const sentinelActions = actionBuilder(CONTRACT, ready.address, sentinelArgs);
   const sentinelPrepared = await ready.prepare(sentinelActions, true);
-  const noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs);
+  let noteId: string;
+  try {
+    noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs);
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("prepared exit must contain exactly")) {
+      throw new Error(`${error.message} Ready X version: ${ready.version}. Stage: simulated preparation.`);
+    }
+    throw error;
+  }
   const auth: Authorization = cancel
     ? { operation: "CANCEL_REFUND", base: { ...base(invitation.vaultId, invitation.ownerKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId } }
     : { operation: "CLAIM", base: { ...base(invitation.vaultId, invitation.successorKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId }, requested_at: vault.requestedAt, claim_after: vault.claimAfter };
