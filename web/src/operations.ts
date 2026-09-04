@@ -8,6 +8,7 @@ import {
   buildClaimActions,
   buildFundActions,
   resolveSimulatedPreparedExitNoteId,
+  inspectSimulatedExitWrites,
   serializeControl,
   type ControlArgs,
 } from "../../client/src/actions.ts";
@@ -314,6 +315,7 @@ export async function prepareExitPackage(input: {
   vault: VaultSnapshot;
   roleKey: LocalStarkKey;
   action: "CANCEL_REFUND" | "CLAIM";
+  diagnosticOnly?: boolean;
 }): Promise<Readonly<Record<string, unknown>>> {
   const { ready, invitation, vault, roleKey, action } = input;
   const cancel = action === "CANCEL_REFUND";
@@ -333,6 +335,10 @@ export async function prepareExitPackage(input: {
   const actionBuilder = cancel ? buildCancelRefundActions : buildClaimActions;
   const sentinelActions = actionBuilder(CONTRACT, ready.address, sentinelArgs);
   const sentinelPrepared = await ready.prepare(sentinelActions, true);
+  if (input.diagnosticOnly) {
+    const report = inspectSimulatedExitWrites(sentinelPrepared);
+    throw new Error(`Preparation check complete. No claim signed or submitted. Ready X ${ready.version}. Share this report privately with support: ${JSON.stringify(report)}`);
+  }
   let noteId: string;
   try {
     noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs);

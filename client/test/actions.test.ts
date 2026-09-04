@@ -24,6 +24,7 @@ import {
   PrivateAction,
   resolvePreparedExitNoteId,
   resolveSimulatedPreparedExitNoteId,
+  inspectSimulatedExitWrites,
   serializeExit,
   validatePreparedExitProofEnvelope,
   type ExitArgs,
@@ -321,6 +322,7 @@ function preparedExit(
     entrypoint?: string;
     simulate?: boolean;
     serverActionsBefore?: readonly (readonly string[])[];
+    setupActions?: readonly (readonly string[])[];
     auditorPublicKey?: string;
     ephemeralPublicKey?: string;
     encryptedRecipient?: string;
@@ -354,6 +356,7 @@ function preparedExit(
   ];
   const copies = options.copies ?? 1;
   const actions = [
+    ...(options.setupActions ?? []),
     writeOnce,
     openNote,
     ...(options.serverActionsBefore ?? []),
@@ -506,6 +509,21 @@ test("simulate=true sentinel may omit screening suffix while strict final parsin
       ),
     /Option::None/,
   );
+});
+
+test("fresh-wallet diagnostics expose storage targets and shapes without proof or values", () => {
+  const prepared = preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+    simulate: true,
+    setupActions: [["0x0", "0x111", "0x2", "0xabcdef", "0xfedcba"], ["0x0", "0x222", "0x1", "0x1"]],
+  });
+  const report = inspectSimulatedExitWrites(prepared);
+  assert.deepEqual(report.actionTypes, ["0", "0", "0", "7", "10"]);
+  assert.deepEqual((report.writes as { valueLength: number }[]).map((write) => write.valueLength), [2, 1, 2]);
+  assert.ok(!JSON.stringify(report).includes("abcdef"));
+  assert.ok(!JSON.stringify(report).includes("fedcba"));
+  assert.ok(!JSON.stringify(report).includes("deadbeef"));
+  assert.throws(() => inspectSimulatedExitWrites(preparedExit(PrivateAction.Claim, exit, "0xdeadbeef")), /simulat|proof/i);
+  assert.throws(() => resolveSimulatedPreparedExitNoteId(prepared, pool, contract, PrivateAction.Claim, exit), /must contain exactly/);
 });
 
 test("prepared exits require the exact source-faithful open-note action shape", () => {

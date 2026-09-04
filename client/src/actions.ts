@@ -257,6 +257,31 @@ export function resolveSimulatedPreparedExitNoteId(
   ).noteId;
 }
 
+/** Local, simulation-only support report. Never contains keys, proof, or write values. */
+export function inspectSimulatedExitWrites(prepared: PreparedCallAndProof): Readonly<Record<string, unknown>> {
+  assertSimulatedPreparedProof(prepared);
+  const normalized = normalizePreparedPoolCall(prepared.call);
+  if (normalized.pool !== CANONICAL_STRK20_POOL || normalized.entrypoint !== "apply_actions") {
+    throw new Error("Diagnostic requires the canonical privacy pool.");
+  }
+  const parsed = parseServerInvokes(normalized.calldata, "simulated-may-omit-screening-suffix");
+  if (parsed.actions.length > 24) throw new Error("Diagnostic action limit exceeded.");
+  const noteAddresses = parsed.openNotes.map((note) => notesStorageAddress(BigInt(note.noteId)));
+  return Object.freeze({
+    schema: "afterlight-exit-write-diagnostic/1",
+    simulationOnly: true,
+    actionTypes: parsed.actions.map((action) => action.variant.toString()),
+    writes: parsed.writeOnceActions.map((write) => ({
+      actionIndex: write.actionIndex,
+      storageAddress: felt(write.storageAddress),
+      valueLength: write.value.length,
+      firstValueNonzero: write.value[0] !== undefined && write.value[0] !== 0n,
+      booleanTrue: write.value.length === 1 && write.value[0] === 1n,
+      matchesOpenNoteStorage: noteAddresses.includes(write.storageAddress),
+    })),
+  });
+}
+
 function validatePreparedExit(
   preparedCall: PreparedPoolCall,
   pool: FeltInput,
