@@ -1,0 +1,210 @@
+diff --git a/packages/privacy/src/tests/test_client.cairo b/packages/privacy/src/tests/test_client.cairo
+index 7ba2402..2742fd4 100644
+--- a/packages/privacy/src/tests/test_client.cairo
++++ b/packages/privacy/src/tests/test_client.cairo
+@@ -54,6 +54,92 @@ use starkware_utils_testing::test_utils::{
+     assert_panic_with_felt_error,
+ };
+
++// Afterlight investigation only. Local test contracts and test-supplied proof facts;
++// these tests do not run Ready X, generate an authentic proof, or use Mainnet funds.
++fn afterlight_channel_case(initialized: bool, unrelated_setup: bool) {
++    let mut test: Test = Default::default();
++    let mut user = test.new_user();
++    let token = test.new_token();
++    let token_addr = token.contract_address();
++    let other_token = test.new_token();
++    let other_token_addr = other_token.contract_address();
++    user.set_viewing_key_e2e();
++    user.open_channel_e2e(recipient: user, index: 0);
++    if initialized {
++        user.open_subchannel_e2e(recipient: user, :token_addr, index: 0);
++    }
++
++    let mut client_actions = array![];
++    let has_prefix = !initialized || unrelated_setup;
++    if has_prefix {
++        let setup_token = if unrelated_setup { other_token_addr } else { token_addr };
++        let setup_index = if initialized { 1 } else { 0 };
++        client_actions.append(ClientAction::OpenSubchannel(OpenSubchannelInput {
++            recipient_addr: user.address,
++            recipient_public_key: user.public_key,
++            channel_key: user.compute_channel_key(recipient: user),
++            index: setup_index,
++            token: setup_token,
++            salt: user.get_salt().into(),
++        }));
++    }
++    let random = user.get_random();
++    let note_input = user.new_open_note(recipient: user, :token_addr, index: 0, :random);
++    let amount = 1_u128;
++    let (note_id, expected_note) = user.compute_open_note_with_amount(create_note_input: note_input, :amount);
++    let invoke_input = test.privacy.invoke_external_echo_deposits(
++        [OpenNoteDeposit { note_id, token: token_addr, amount }].span(),
++    );
++    client_actions.append(ClientAction::CreateOpenNote(note_input));
++    client_actions.append(ClientAction::InvokeExternal(invoke_input));
++    let actions = user.compile_actions(client_actions: client_actions.span());
++    let mut actual_types = array![];
++    for action in actions {
++        let mut encoded = array![];
++        action.serialize(ref encoded);
++        actual_types.append(*encoded.at(0));
++    }
++    if has_prefix {
++        assert_eq!(actual_types.span(), [0, 0, 0, 7, 10].span());
++    } else {
++        assert_eq!(actual_types.span(), [0, 7, 10].span());
++    }
++    // Compilation alone did not deposit anything or initialize the missing channel.
++    assert_eq!(test.privacy.get_note(:note_id), Zero::zero());
++    if !initialized {
++        assert!(!test.privacy.subchannel_exists(
++            subchannel_marker: user.compute_subchannel_marker(recipient: user, :token_addr),
++        ));
++    }
++
++    // Use the upstream echo depositor, NOT the Afterlight contract. Its mock funds
++    // and proof-fact cheat are explicitly outside Mainnet/proof verification claims.
++    token.supply(address: test.privacy.echo_executor, :amount);
++    token.approve(owner: test.privacy.echo_executor, spender: test.privacy.address, amount: amount.into());
++    test.privacy.apply_actions(:actions);
++    assert_eq!(test.privacy.get_note(:note_id), expected_note);
++    if unrelated_setup {
++        assert!(test.privacy.subchannel_exists(
++            subchannel_marker: user.compute_subchannel_marker(recipient: user, token_addr: other_token_addr),
++        ));
++    }
++}
++
++#[test]
++fn test_afterlight_fresh_token_channel_five_actions() {
++    afterlight_channel_case(initialized: false, unrelated_setup: false);
++}
++
++#[test]
++fn test_afterlight_separate_setup_three_actions() {
++    afterlight_channel_case(initialized: true, unrelated_setup: false);
++}
++
++#[test]
++fn test_afterlight_unrelated_setup_same_five_actions() {
++    afterlight_channel_case(initialized: true, unrelated_setup: true);
++}
++
+ #[test]
+ fn test_validate() {
+     let mut test: Test = Default::default();
+diff --git a/sdk/tests/internal/afterlight-fresh-wallet.test.ts b/sdk/tests/internal/afterlight-fresh-wallet.test.ts
+new file mode 100644
+index 0000000..1aee492
+--- /dev/null
++++ b/sdk/tests/internal/afterlight-fresh-wallet.test.ts
+@@ -0,0 +1,107 @@
++/**
++ * Afterlight compatibility investigation, SDK pin 66e3caae8c0201227a6719696d004e30d90aea65.
++ * LOCAL MOCKNET ONLY. No RPC, wallet extension, funds, fees or authentic proofs.
++ * The MockPool emits client-action labels, not serialized Cairo ServerActions.
++ * cairoExpansion below is an explicit source-derived mapping, not captured output.
++ */
++import { describe, expect, it } from "vitest";
++import { Mocknet } from "../../src/testing/mocknet.js";
++import { Open, type Actions, type ExecuteOptions } from "../../src/interfaces.js";
++import { bigintReviver } from "../../src/testing/mock-proof-invocation-factory.js";
++import type { ClientAction } from "../../src/internal/client-actions.js";
++
++const AUTO_CHANNELS_ONLY: ExecuteOptions = { autoDiscover: { channels: "refresh" }, autoSetup: true };
++
++const cairoExpansion = (actions: ClientAction[]) => actions.flatMap((action) => {
++  switch (action.type) {
++    case "OpenSubchannel": return [0, 0];
++    case "CreateOpenNote": return [0, 7];
++    case "InvokeExternal": return [10];
++    default: throw new Error(`Unmapped client action: ${action.type}`);
++  }
++});
++
++async function registeredSelfChannel() {
++  const mocknet = new Mocknet({ poolAddress: 1n });
++  const env = mocknet.initialize();
++  const transfers = { alice: mocknet.createPrivateTransfers(env.alice.address, env.alice.privateKey) };
++  mocknet.executeOutside(await transfers.alice.build().register().execute());
++  mocknet.executeOutside(await transfers.alice.build().setup(env.alice.address).execute());
++  return { mocknet, env, transfers };
++}
++
++function openNoteAndInvoke(context: Awaited<ReturnType<typeof registeredSelfChannel>>): Actions {
++  return {
++    createNotes: [{ recipient: context.env.alice.address, token: BigInt(context.env.ace), amount: Open }],
++    invoke: { callBuilder: ({ openNotes }) => ({ contractAddress: "0x1234", calldata: [openNotes[0].noteId] }) },
++  };
++}
++
++async function compile(context: Awaited<ReturnType<typeof registeredSelfChannel>>, actions: Actions) {
++  const invocation = await context.transfers.alice.createProofInvocation(actions, AUTO_CHANNELS_ONLY);
++  const plan = JSON.parse((invocation.invocation.calldata as string[])[2], bigintReviver) as ClientAction[];
++  // Exercises upstream MockPool preconditions without applying the returned actions.
++  const result = await context.transfers.alice.executeWithInvocation(invocation);
++  expect(result.callAndProof.proof.data).toBe(""); // Explicitly NOT an authentic proof.
++  return { plan, result };
++}
++
++describe("Afterlight fresh-wallet SDK reproduction — mock/protocol evidence only", () => {
++  it("registered self-channel without this token compiles the five-action candidate", async () => {
++    const context = await registeredSelfChannel();
++    const { plan } = await compile(context, openNoteAndInvoke(context));
++    expect(plan.map((action) => action.type)).toEqual(["OpenSubchannel", "CreateOpenNote", "InvokeExternal"]);
++    expect(cairoExpansion(plan)).toEqual([0, 0, 0, 7, 10]);
++    const setup = plan[0];
++    const note = plan[1];
++    if (setup.type !== "OpenSubchannel" || note.type !== "CreateOpenNote") throw new Error("wrong plan");
++    expect(setup.input.token).toBe(note.input.token);
++    expect(setup.input.recipient_addr).toBe(note.input.recipient_addr);
++    expect((await context.transfers.alice.discoverNotes()).notes.get(BigInt(context.env.ace)) ?? []).toHaveLength(0);
++    // A preparation alone does not initialize the token channel.
++    expect(cairoExpansion((await compile(context, openNoteAndInvoke(context))).plan)).toEqual([0, 0, 0, 7, 10]);
++  });
++
++  it("explicit token setup removes the prefix without requiring a private token balance", async () => {
++    const context = await registeredSelfChannel();
++    const { mocknet, env, transfers } = context;
++    mocknet.executeOutside(await transfers.alice.build(AUTO_CHANNELS_ONLY).with(env.ace).setup(env.alice.address).execute());
++    const { plan } = await compile(context, openNoteAndInvoke(context));
++    expect(plan.map((action) => action.type)).toEqual(["CreateOpenNote", "InvokeExternal"]);
++    expect(cairoExpansion(plan)).toEqual([0, 7, 10]);
++    expect((await transfers.alice.discoverNotes()).notes.get(BigInt(env.ace)) ?? []).toHaveLength(0);
++  });
++
++  it("positive deposit-to-self also initializes the token channel in Mocknet", async () => {
++    const context = await registeredSelfChannel();
++    const { mocknet, env, transfers } = context;
++    mocknet.executeOutside(await transfers.alice.build(AUTO_CHANNELS_ONLY).with(env.ace).deposit({ amount: 1n }).execute());
++    const { plan } = await compile(context, openNoteAndInvoke(context));
++    expect(cairoExpansion(plan)).toEqual([0, 7, 10]);
++    const notes = (await transfers.alice.discoverNotes()).notes.get(BigInt(env.ace)) ?? [];
++    expect(notes.reduce((sum, note) => sum + BigInt(note.amount), 0n)).toBe(1n);
++  });
++
++  it("zero closed self-transfer is rejected, so it is not a free setup workaround", async () => {
++    const context = await registeredSelfChannel();
++    await expect(context.transfers.alice.build(AUTO_CHANNELS_ONLY).with(context.env.ace)
++      .transfer({ recipient: context.env.alice.address, amount: 0n }).execute()).rejects.toThrow();
++  });
++
++  it("unrelated token setup can pass MockPool preconditions with the same expanded shape", async () => {
++    const context = await registeredSelfChannel();
++    const { mocknet, env, transfers } = context;
++    mocknet.executeOutside(await transfers.alice.build(AUTO_CHANNELS_ONLY).with(env.ace).setup(env.alice.address).execute());
++    const { plan } = await compile(context, {
++      ...openNoteAndInvoke(context),
++      openTokenChannels: [{ recipient: env.alice.address, token: BigInt(env.bee) }],
++    });
++    expect(cairoExpansion(plan)).toEqual([0, 0, 0, 7, 10]);
++    const setup = plan[0];
++    const note = plan[1];
++    if (setup.type !== "OpenSubchannel" || note.type !== "CreateOpenNote") throw new Error("wrong plan");
++    expect(setup.input.token).toBe(BigInt(env.bee));
++    expect(note.input.token).toBe(BigInt(env.ace));
++    expect(setup.input.token).not.toBe(note.input.token);
++  });
++});

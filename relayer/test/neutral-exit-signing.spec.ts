@@ -67,6 +67,26 @@ describe("neutral exact-exit signing boundary", () => {
     expect(() => validatePreparedExitPackage(wrongPoolClass, EXIT_POLICY)).toThrow(/proof_output_shape/);
   });
 
+  it("rejects the five-action setup candidate even with updated output and locks", () => {
+    for (const action of ["CLAIM", "CANCEL_REFUND"]) {
+      const candidate = preparedClaimPackage();
+      if (action === "CANCEL_REFUND") {
+        candidate.action = action;
+        candidate.expectedState = "1";
+        candidate.prepared.call.calldata[15] = "1";
+        candidate.prepared.call.calldata[19] = "1";
+      }
+      const raw = candidate.prepared.call.calldata;
+      raw[0] = "5";
+      // Synthetic fields. Nonzero felt252 salt (not u128), [2, 1] widths and
+      // boolean true still cannot establish same-note/channel/token linkage.
+      raw.splice(1, 0, "0", "273", "2", (1n << 200n).toString(), "2748", "0", "546", "1", "1");
+      candidate.prepared.proof.output = [LOCKED_POOL_CLASS_HASH, ...raw.slice(0, -1)];
+      candidate.locks = buildExitLocks(candidate);
+      expect(() => validatePreparedExitPackage(candidate, EXIT_POLICY)).toThrow(/exact_write_note_invoke_shape/);
+    }
+  });
+
   it("accepts the same exact-note boundary for an owner-authorized cancellation", () => {
     const cancellation = structuredClone(preparedClaimPackage());
     cancellation.action = "CANCEL_REFUND";

@@ -526,6 +526,29 @@ test("fresh-wallet diagnostics expose storage targets and shapes without proof o
   assert.throws(() => resolveSimulatedPreparedExitNoteId(prepared, pool, contract, PrivateAction.Claim, exit), /must contain exactly/);
 });
 
+test("five-action setup prefixes remain rejected for simulated and final claims and cancellations", () => {
+  // Synthetic storage and encrypted values only. Widths/booleans, stable targets,
+  // and an intact note cannot bind these writes to the note's channel or token.
+  const setupActions = [
+    ["0x0", "0x111", "0x2", hex(1n << 200n), "0xabc"],
+    ["0x0", "0x222", "0x1", "0x1"],
+  ];
+  for (const kind of [PrivateAction.Claim, PrivateAction.CancelRefund] as const) {
+    const args = { ...exit, expected_state: kind === PrivateAction.Claim ? 2n : 1n };
+    for (const simulate of [true, false]) {
+      const prepared = preparedExit(kind, args, "0xdeadbeef", { setupActions, simulate });
+      const resolve = () => simulate
+        ? resolveSimulatedPreparedExitNoteId(prepared, pool, contract, kind, args)
+        : resolvePreparedExitNoteId(prepared.call, pool, contract, kind, args);
+      assert.throws(resolve, /received 5 action\(s\), types \[0, 0, 0, 7, 10\]/);
+    }
+    // Removing the unrelated prefix, as a separate synthetic fixture rather than
+    // editing a real proof-bound response, restores the established boundary.
+    const ordinary = preparedExit(kind, args, "0xdeadbeef");
+    assert.equal(resolvePreparedExitNoteId(ordinary.call, pool, contract, kind, args), "0xdeadbeef");
+  }
+});
+
 test("prepared exits require the exact source-faithful open-note action shape", () => {
   const invalidOptions = [
     { writeOnceStorage: "0x4455" },

@@ -62,6 +62,21 @@ It excludes raw write values, wallet keys, application signatures, note IDs,
 and proof packages. Storage targets are pseudonymous metadata: share the report
 privately, not in public issue comments. It is not sent to telemetry.
 
+## Local reproduction now available
+
+The [pinned SDK and Cairo reproduction](../investigations/ready-fresh-wallet/README.md)
+passes five SDK Mocknet tests and three added Cairo tests. A missing token
+subchannel produces the five-action sequence; initializing that subchannel
+separately removes the prefix, even without a private token balance. A positive
+deposit-to-self also initializes it in SDK Mocknet. Neither result verifies
+Ready X's supported UI flow, fees or real preparation.
+
+The Cairo tests also confirm that an unrelated token subchannel can be opened
+alongside the intended note while preserving the five-action shape. The test
+helpers use synthetic funds and cheat proof facts; they are not authentic-proof
+verification. Both client and relayer retain rejection coverage for this shape.
+No compatibility fix or external claim completion is claimed.
+
 ## Required before claiming compatibility
 
 Capture and establish the actual setup writes' semantics in a controlled test;
