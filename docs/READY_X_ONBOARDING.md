@@ -4,12 +4,14 @@
 
 This is the Ready X flow implemented by the public Afterlight interface and
 exercised by the deployed Mainnet mechanism. The contract and a complete
-founder-operated E3 lifecycle through the public interface exist. The unrelated
-owner-successor E4 claim also succeeded on Mainnet on September 5, 2026; its
-CLAIMED state and liability settlement were independently verified. The external
-private-wallet balance delta was not independently read. Nothing here is a
-standing instruction to fund or sign; users must review the live wallet request
-and current fees.
+founder-operated E3 lifecycle through the public interface exist. An assisted
+external owner-successor claim also succeeded on Mainnet on September 5, 2026;
+its `CLAIMED` state and zero remaining liability were independently verified.
+The user subsequently confirmed `1 STRK` visible in the successor's private
+account; that balance was not independently read by the building agent.
+Unassisted cold-user E4 completion is not claimed. Nothing here is a standing
+instruction to fund or sign; users must review the live wallet request and
+current fees.
 
 ## Accounts and STRK20 prerequisites
 
@@ -23,11 +25,15 @@ Afterlight requires two genuinely separate Ready X accounts:
 
 Before a live lifecycle, each account must be deployed on Starknet Mainnet,
 registered with the live STRK20 pool, and able to read its shielded balance and
-prepare an open note. The owner needs sufficient shielded STRK for the fixed
-reserve. Each payer also needs sufficient public or shielded funds for the
-then-current account, registration, protocol-fee, and gas route. Fees and
-account state must be freshly quoted in Ready X; this document deliberately
-does not present an old estimate as a funding instruction.
+prepare an open note. The owner pays the fixed `1 STRK` reserve plus Ready's
+quoted funding protocol and network fees; the principal is not the total cost.
+Account deployment, private registration and any shielding needed for funding
+are separate wallet steps that may have their own costs. Eligible claim and
+cancellation fees are paid by Afterlight's bounded sponsor while live capacity
+is available, not from the recovered principal. Check capacity before paying
+setup costs, and review current fees and account state in Ready X. No historical
+quote or sponsor-balance snapshot is a standing funding instruction or a
+guarantee of continuous sponsorship.
 
 Private activation is separate from shielding a token. An account can be
 registered and still have zero private STRK and an uninitialized STRK
@@ -35,9 +41,10 @@ subchannel. Do not repeat activation or recommend a Shield deposit merely
 because Afterlight rejects a prepared-action shape. The versioned
 [first-use compatibility policy](FRESH_WALLET_COMPATIBILITY.md) sponsors
 that token setup alongside recovery when the live sponsor advertises support.
-The E4 claim confirms the onchain exit for the reported activated/zero-balance
-case. Always confirm the private-wallet balance separately; local tests and a
-proof-preparation approval are not a receipt or a balance confirmation.
+The assisted external claim confirms an onchain exit for the reported
+activated/zero-balance case, followed by the user's report of `1 STRK` visible
+privately. Always confirm the private-wallet balance separately; local tests
+and a proof-preparation approval are not a receipt or a balance confirmation.
 
 Afterlight labels Ready's destination preparation and final proof preparation
 separately. If first-use token setup is present, an in-page approval appears
@@ -78,8 +85,9 @@ replaced with the encrypted format before funding.
 
 ## Owner journey
 
-1. Connect the owner Ready X account and verify Starknet Mainnet, deployment,
-   STRK20 registration, and balances.
+1. Check current new-reserve capacity before paying wallet-setup costs. Connect
+   the owner Ready X account and verify Starknet Mainnet, deployment, STRK20
+   registration, and balances.
 2. Generate and back up a new owner application key on the owner's device.
 3. Receive only the successor's fresh per-vault public key.
 4. Choose a permitted vault mode, fixed denomination, inactivity interval, and
@@ -119,9 +127,10 @@ replaced with the encrypted format before funding.
    bounded neutral sponsor. If an intervening wallet action changes the
    destination note index, the exact-note application signature makes the
    onchain helper fail closed.
-7. Treat recovery as complete only after the mainnet receipt succeeds, the
-   Afterlight liability is reduced exactly once, and the successor's shielded
-   balance shows the returned note.
+7. Confirm the successful Mainnet receipt, `CLAIMED` state and exact liability
+   reduction, then check the successor's private balance. If settlement is
+   confirmed but Ready's balance refresh is pending, refresh Ready when
+   available; do not claim the reserve again.
 
 Both private exits use exact destination notes. The contract does not prove
 that a hidden note belongs to a precommitted wallet address; only the designated

@@ -1,13 +1,16 @@
 # Fresh token-channel compatibility reproduction
 
-Status: reproduced locally; Ready X compatibility and external recovery remain unverified.
+Status: local reproduction complete; the versioned first-use policy has since
+shipped and an assisted external claim succeeded on September 5, 2026. These
+synthetic reproduction tests remain separate from that live evidence; see
+[the current compatibility record](../../docs/FRESH_WALLET_COMPATIBILITY.md).
 
 This directory contains a test-only patch for the official
 [starknet-privacy source at 66e3caae8c0201227a6719696d004e30d90aea65](https://github.com/starkware-libs/starknet-privacy/tree/66e3caae8c0201227a6719696d004e30d90aea65).
 It contains only synthetic test identities and values. It does not contain the
 external tester's storage addresses, keys, invitation or proof package.
 
-## Results — September 5, 2026
+## Results — September 5, 2026 (historical synthetic snapshot)
 
 Five SDK Mocknet tests and three added Cairo contract tests passed:
 
@@ -30,9 +33,12 @@ the Cairo tests independently assert the actual serialized enum discriminants.
 
 The unrelated-token case means widths, boolean values, stable targets and an
 intact destination note are insufficient to establish that extra setup belongs
-to that note. It demonstrates unwanted sponsor-policy expansion, not theft from
-an Afterlight reserve. Both production validators remain restricted to three
-actions. Never remove writes from a real proof-bound response.
+to that note. It demonstrates expansion beyond the original sponsor policy,
+not theft from an Afterlight reserve. Default validation remains restricted to
+three actions. The subsequent versioned policy explicitly permits one
+protocol-valid, potentially unrelated setup with per-attempt consent and a
+role signature over the entire final package. Never remove writes from a real
+proof-bound response.
 
 ## Reproduce
 
@@ -66,15 +72,18 @@ and the SDK tests and strict TypeScript check passed again. Use that working
 directory and the command above. An intermediate `npm install` was confined to
 the isolated reproduction checkout. No Afterlight dependencies were changed.
 
-## Remaining release gate
+## Release follow-up and evidence limits
 
-1. Establish the supported Ready X first-use setup flow on a controlled wallet.
-2. Quote and approve any real setup fees before spending; do not treat a pool
-   fee constant or Mocknet deposit as a complete Ready/network quote.
-3. Verify subsequent **simulated and final** preparation passes both unchanged
-   Afterlight validators.
-4. Complete an authorized external claim and verify transaction success, CLAIMED
-   state, reserve liability reduction and the exact private-balance increase.
+The released browser and relayer now implement the bounded five-action policy
+with simulated/final binding and final-package role consent. The September 5
+assisted external claim was independently confirmed successful on Mainnet with
+`CLAIMED` state and zero remaining liability. The user subsequently confirmed
+`1 STRK` visible in the successor's private account; that balance is
+user-reported, not independently read by the building agent. Unassisted
+cold-user E4 completion and all fresh-wallet variants remain unproven.
 
-A successful simulation, fee estimate, support acknowledgement, or these local
-tests does not satisfy the external recovery gate.
+These local tests alone are not external recovery evidence. The owner still
+pays the reserve principal and Ready's quoted funding and required wallet-setup
+costs. Eligible exit/token-setup sponsorship depends on the live policy and
+capacity; private registration is separate. A pool-fee constant, Mocknet
+deposit or historical sponsor balance is not a complete wallet/network quote.

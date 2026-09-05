@@ -10,6 +10,14 @@ Drill completed through the canonical app, and an approved Ready X
 `8 STRK` after its exact-note claim. Prepared, simulated, reverted, and
 unrelated pool transactions are not counted as successful evidence.
 
+An assisted external owner-successor claim also succeeded on September 5, 2026.
+Its `CLAIMED` state and zero remaining liability were independently verified;
+the user subsequently confirmed `1 STRK` visible in the successor's private
+account. The external private balance was not independently read by the building
+agent. This is assisted external completion, not an unassisted cold-user E4
+claim. External identifiers are not added to the five published receipts or
+the approved demo.
+
 ## Pinned Starknet Mainnet dependencies
 
 | Item | Pinned value | Status |
@@ -66,8 +74,8 @@ pool fee. The public E3 vault is also `CLAIMED`; its immediate Ready X
 reconciliation is `7 STRK -> 8 STRK`. The verified final demo is available on
 [YouTube](https://youtu.be/doPd4wyuODc).
 
-The public E3 lifecycle was founder-operated. An unrelated owner-successor E4
-completion is not claimed. After that lifecycle, the neutral sponsor allowance
+The public E3 lifecycle was founder-operated. Unassisted cold-user E4
+completion is not claimed. After that historical lifecycle, the neutral sponsor allowance
 was deliberately restored to exactly `12 STRK`. The hardened policy accepts a
 positive allowance only in exact `6 STRK` fee increments, caps it at `60 STRK`,
 and admits at most three outstanding vaults. New funding is allowed beside an
@@ -75,6 +83,16 @@ existing isolated liability only when the current allowance, sponsor balance,
 retained floor, daily budget, reservation state and lease can conservatively
 cover every admitted exit. A successful claim or cancellation consumes exactly
 `6 STRK` of allowance.
+
+Those allowance and balance checkpoints are historical, not a statement of
+current sponsor capacity. The app reads live capacity before admitting funding
+or a fresh sponsored exit. The owner pays the `1 STRK` principal plus Ready's
+quoted funding and any required wallet-setup costs. Eligible claim and
+cancellation fees are sponsored within the current limits; neither continuous
+availability nor an entirely fee-free wallet lifecycle is promised. The
+[first-use setup policy](FRESH_WALLET_COMPATIBILITY.md) can cover a consented
+token-subchannel setup with an exit, but does not replace account deployment or
+private registration.
 
 The sponsor returns the exact signed private-exit transaction to the browser,
 which broadcasts it through an independent public RPC and then asks the service

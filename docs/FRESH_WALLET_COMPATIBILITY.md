@@ -2,15 +2,17 @@
 
 Status: the bounded compatibility policy is implemented and reviewed. Runtime
 availability is advertised by `GET /health` under `setupSponsorship`. On September
-5, 2026, the external E4 claim was independently confirmed SUCCEEDED on Mainnet,
-with CLAIMED vault state and the 1 STRK liability settled. The external successor
-reported prior private activation and zero private STRK without a Shield deposit.
-Their private-wallet balance delta was not independently read by the building
-agent. One completed claim is not a guarantee of all fresh-wallet variants.
+5, 2026, an assisted external owner-successor claim was independently confirmed
+SUCCEEDED on Mainnet, with `CLAIMED` vault state and zero remaining liability.
+The external successor reported prior private activation and zero private STRK
+without a Shield deposit; the user subsequently confirmed `1 STRK` visible in
+the successor's private account. That private balance is user-reported, not an
+independent read by the building agent. Unassisted cold-user E4 completion and
+compatibility with every fresh-wallet variant are not claimed.
 
 ## Authorization preflight
 
-An external diagnostic subsequently stopped with `Not preauthorized`. In the
+An earlier external diagnostic stopped with `Not preauthorized`. In the
 official public Argent X source at commit
 `e3545daa417d6b60332b6112816d5e3b13c34358`,
 `packages/extension/src/inpage/requestMessageHandlers/requestChainIdHandler.ts`
@@ -48,8 +50,10 @@ The pinned STRK20 reference, commit
 Sources: `starknet-privacy/packages/privacy/src/privacy.cairo`,
 `objects.cairo`, `hashes.cairo`, and `sdk/src/internal/compiler.ts`.
 The SDK automatically opens a missing token subchannel when preparing a note.
-The encrypted subchannel record uses a fresh random salt, so a future supported
-five-action binder must account for semantic equivalence across preparations.
+The encrypted subchannel record uses a fresh random salt. The versioned
+five-action binder permits the setup salt/ciphertext to change across
+preparations while keeping targets, the existence boolean and exit semantics
+fixed.
 
 This explains a possible five-action sequence, not the identity of the actual
 external writes. Storage-map keys depend on private channel material; arbitrary
@@ -82,7 +86,8 @@ Ready X's supported UI flow, fees or real preparation.
 The Cairo tests also confirm that an unrelated token subchannel can be opened
 alongside the intended note while preserving the five-action shape. The test
 helpers use synthetic funds and cheat proof facts; they are not authentic-proof
-verification. Both client and relayer retain rejection coverage for this shape.
+verification. Both client and relayer retain default-policy rejection coverage
+for this shape; accepting it requires the explicit versioned policy and consent.
 Those reproduction tests alone establish neither live compatibility nor
 external claim completion.
 
@@ -145,12 +150,18 @@ increased. No private balance minimum or separate Shield deposit is introduced.
 Ready's one-time private registration is still a prerequisite; registration
 and first use of a token subchannel are different protocol steps.
 
-## Required before claiming compatibility
+## Verification scope and remaining limits
 
-Capture and establish the actual setup writes' semantics in a controlled test;
-update both browser and relayer validation under the same rule; retain exact
-note, token, amount, contract, authorization, proof and live-state checks. Test
-valid simulated/final pairs, setup randomness, altered/unrelated writes and
-overlapping slots. Then require a successful external transaction receipt and
-the successor's exact private-balance increase. Synthetic unit tests alone do
-not prove external recovery.
+The released browser and relayer enforce the same bounded setup rule, with
+regression coverage for simulated/final pairs, setup randomness, changed
+targets, overlapping slots, exact-exit checks and final role authorization.
+The September 5 assisted external completion is separate live evidence; the
+private balance confirmation remains the user's report. Neither the synthetic
+tests nor that one completion establish unassisted onboarding, every wallet
+variant, or a same-token relationship for encrypted setup.
+
+The owner still pays the reserve principal and Ready's quoted funding and
+wallet-setup costs. Sponsored exit/setup support is conditional on the live
+health policy and available capacity; private registration is not made free by
+this compatibility change. Do not turn a past successful claim or sponsor
+top-up into a permanent fee or availability guarantee.

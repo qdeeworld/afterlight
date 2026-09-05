@@ -17,19 +17,32 @@ Afterlight separates private value movement, application authorization, and tran
 
 `HEARTBEAT`, `REQUEST`, and `VETO` are public state transitions authorized by per-vault Stark signatures. Any submitter may relay a valid authorization; the submitter is never the authority.
 
-For a private exit, Ready creates the exact OPEN note and proof locally. The
+For a private exit, Ready prepares the exact OPEN note and proof. The
 successor application key binds a claim—or the owner application key binds a
 cancellation—to that literal note, current vault, epoch, nonce, token and
 amount. A neutral sponsor accepts only the locked pool call,
 proof facts, application signature, live state, exact allowance and bounded
-resource quote, then signs and broadcasts the outer transaction once. The
+resource quote, then signs the outer transaction and returns it to the browser
+for independent RPC broadcast and receipt reconciliation. The
 contract and pool remain authoritative; package preparation alone is not
 execution evidence.
 
-The sponsor independently pins the live STRK20 pool class and permits exactly
-`WriteOnce`, `EmitOpenNoteCreated`, then `Invoke`. The first action must write
-the canonical packed token value to the storage key derived from the signed
-destination note. Extra actions or writes fail before signing.
+The sponsor independently pins the live STRK20 pool class. The default exit
+permits exactly `WriteOnce`, `EmitOpenNoteCreated`, then `Invoke`; its note write
+must contain the canonical packed token value at the storage key derived from
+the signed destination note. The explicitly enabled
+[role-bound first-use policy](FRESH_WALLET_COMPATIBILITY.md) also permits exactly
+two preceding setup writes: a two-felt encrypted record with nonzero salt and a
+single `true` marker. Occupied slots must be disjoint and exclude known public
+configuration slots. An additional local-role signature binds the entire final
+versioned package after per-attempt consent. One protocol-valid but potentially
+unrelated token setup is allowed; no same-token or recipient relationship is
+inferred from its encrypted storage targets. Other extra actions fail closed.
+
+These local checks bind the proof envelope to the actions; fee estimation is
+not cryptographic proof verification. Starknet's canonical admission/consensus
+boundary authenticates the proof facts and protocol metadata before admission,
+while the pool and Afterlight enforce the exact settlement effects.
 
 ```text
 Ready X + STRK20 pool
@@ -87,7 +100,7 @@ route cannot consume another vault's backing or increase the service's promised
 capacity. Claim and cancellation fail closed when backing is insufficient. The
 contract and pool remain final.
 
-For private exits the Worker validates the exact note, proof, application
+For private exits the Worker validates the exact note, proof envelope, application
 signature, live state and fee bounds, signs the outer sponsor transaction, and
 persists its deterministic hash. It returns that signed transaction to the
 browser for independent public RPC broadcast, then reconciles the receipt. For
@@ -95,6 +108,13 @@ heartbeat, request and veto the privacy-first route remains the neutral relay.
 An explicit Ready X emergency route can submit the same signed application
 authorization directly if availability is more important than hiding the Ready
 address.
+
+The owner pays the reserve principal and Ready's quoted funding and any
+required wallet-setup costs. Eligible claim and cancellation fees are covered
+by the bounded sponsor, subject to live capacity. First-use token setup may be
+included in that exit under the policy above; account deployment and private
+registration remain separate prerequisites. Historical balance snapshots do
+not promise future capacity or a fee-free wallet lifecycle.
 
 There is no administrative withdrawal path. Accidental donations remain
 unaccounted surplus: they cannot create a vault claim, block a user action, or
@@ -108,3 +128,10 @@ recovery of tokens sent directly to the helper.
 ## Current release boundary
 
 The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two spike vaults completed the cancellation and recovery branches, and a fresh public Recovery Drill completed the owner and successor journey through the canonical app. All five qualifying STRK20 receipts are listed in `strk20.json`. The E3 claim moved the public vault to `CLAIMED`, reduced liability and allowance to zero, consumed the successor nonce, and increased the successor's Ready X shielded balance from `7 STRK` to `8 STRK`.
+
+An assisted external owner-successor claim succeeded on September 5, 2026, with
+independently verified `CLAIMED` state and zero remaining liability. The user
+subsequently confirmed `1 STRK` visible in the successor's private account;
+that balance was not independently read by the building agent. This does not
+establish unassisted cold-user E4 completion. The five public receipts and
+approved demo remain unchanged, without external participant identifiers.

@@ -14,7 +14,11 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 **Release status: deployed public Mainnet Recovery Drill.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
 
-The public drill is founder-operated E3 evidence; an unrelated owner-successor E4 completion is not claimed. Neutral sponsorship remains deliberately bounded, but admission is no longer a global one-vault latch. The service admits up to three isolated vaults only when allowance and balance conservatively cover every outstanding exit, accepts allowance only in exact `6 STRK` fee increments, and enforces a fixed daily exit budget. Exit transactions are signed under that policy and returned to the browser for direct RPC broadcast before receipt reconciliation. If the neutral control relay is unavailable, the owner or successor can use an explicit Ready X emergency path; that restores availability but publicly links the Ready address to the vault.
+The public drill is founder-operated E3 evidence. An assisted external owner-successor recovery also succeeded on September 5, 2026: its `CLAIMED` state and zero remaining liability were independently verified, and the user subsequently confirmed `1 STRK` visible in the successor's private account. That private balance is user-reported, not an agent-read measurement. Unassisted cold-user E4 completion is not claimed; the five public receipts and approved demo remain the published evidence set.
+
+Neutral sponsorship remains deliberately bounded, but admission is no longer a global one-vault latch. The service admits up to three isolated vaults only when allowance and balance conservatively cover every outstanding exit, accepts allowance only in exact `6 STRK` fee increments, and enforces a fixed daily exit budget. Exit transactions are signed under that policy and returned to the browser for direct RPC broadcast before receipt reconciliation. If the neutral control relay is unavailable, the owner or successor can use an explicit Ready X emergency path; that restores availability but publicly links the Ready address to the vault.
+
+The owner funds the `1 STRK` principal and pays Ready's quoted funding and any required wallet-setup costs; `1 STRK` is not an all-in cost. Eligible claim and cancellation fees are paid by the bounded sponsor while live capacity is available. A registered successor with zero private STRK can use the [consented first-use token setup](docs/FRESH_WALLET_COMPATIBILITY.md) without a separate Shield deposit when that policy is advertised. Account deployment and private registration remain separate prerequisites, and sponsorship is not a permanent fee-free or availability guarantee.
 
 Application-key backups use password-based PBKDF2 with `600,000` SHA-256 iterations and AES-256-GCM authenticated encryption. Existing version 1 plaintext backups can be imported only for migration and must be replaced before funding.
 
@@ -69,7 +73,7 @@ Prerequisites:
 - Starknet Foundry `0.62.1`
 - Node.js `22.13.1`
 
-These are the exact versions exercised by CI. Both npm packages have committed
+These are the exact versions exercised by CI. All three npm packages have committed
 lockfiles and must be installed with `npm ci`, not `npm install`.
 
 ```bash

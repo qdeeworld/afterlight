@@ -40,7 +40,7 @@ legal inheritance.
 
 - Ready X protects wallet and viewing-key material and correctly implements the advertised STRK20 Wallet API.
 - The STRK20 auditor and Ready/paymaster infrastructure are trusted with the protocol metadata they necessarily process; they are outside the public-observer privacy claim.
-- The live STRK20 pool verifies proofs, charges its configured fee, and applies actions atomically.
+- Starknet's canonical admission/consensus boundary authenticates proof facts and protocol metadata; the live STRK20 pool validates the bound output, charges its configured fee, and applies actions atomically. Local fee estimation is not cryptographic proof verification.
 - Starknet provides transaction ordering and state rollback on revert.
 - The user's device protects the per-vault owner or successor secret, its backup password, and its encrypted backup.
 - The relayer may refuse to sign sponsorship or go offline, but cannot forge authorization or redirect settlement. After it signs a private exit, the browser can broadcast the exact transaction independently. Controls also have an explicit Ready X emergency route that sacrifices wallet unlinkability for availability.
@@ -65,7 +65,9 @@ Relayer availability is operationally important but not trusted for correctness.
 | Failed token/pool settlement leaves false state | Cairo transaction rollback restores state and liability |
 | Tokens are donated directly to the helper | No administrative withdrawal exists; donated surplus remains inert and cannot change locked liabilities |
 | Relayer drains sponsorship | Schema limits, expiry, validation before scarce per-vault rate limiting, separate control/exit daily caps, shared nonce serialization, and breach freeze |
-| Prepared proof swaps the pool implementation or adds actions | Pinned live pool class plus an exact `WriteOnce → EmitOpenNoteCreated → Invoke` action sequence and canonical destination-note storage write |
+| Prepared proof swaps the pool implementation or adds actions | Pinned live pool class, canonical destination-note storage write and exact `WriteOnce → EmitOpenNoteCreated → Invoke` sequence; the explicitly enabled v2 policy permits only its bounded two-write setup prefix with separate final-package role authorization |
+| Encrypted setup is assumed to belong to the exit token or recipient | No such relationship is claimed. The consented policy accepts one protocol-valid, potentially unrelated token setup; other extra actions are rejected. Structural storage checks do not prove hashed namespace membership. |
+| Wallet, key or invitation changes while setup approval is pending | Per-attempt consent and captured-context checks fail closed before further authorization; cancellation, expiry and dialog failure do not grant consent |
 | Ambiguous broadcast is retried or released | `SUBMITTED` retains its hash and reservation; duplicate/unknown RPC results reconcile without signing or rebroadcasting |
 | Browser reload loses the only exact retry artifact | The opaque checkpoint admission owner and any ambiguous exact cancellation/claim package are retained in tab-scoped session storage until terminal reconciliation; exact-exit packages are privacy-sensitive but contain no owner or successor application secret and are never sent to logs or analytics |
 | Reserve demand exceeds current neutral-sponsor capacity | Admission derives a conservative count from fee-aligned allowance, sponsor balance, the retained floor, current liabilities, the daily budget, reservations and leases. Up to three isolated vaults can coexist only when every admitted exit remains fully backed. A vault occupies one slot instead of globally closing funding; no vault can consume another vault's backing. |
@@ -105,3 +107,10 @@ donations to the helper expecting a refund; unaccounted surplus remains inert.
 The local suites cover caller, token, amount, mode, interval, key reuse, wrong-key, expiry, nonce, epoch, state, contract, chain, vault, destination, redirect, replay, double settlement, dust, surplus, liability isolation, timing boundaries, veto/claim races, and failed-transfer rollback.
 
 Mainnet receipts now prove the neutral-sender control path, both STRK20 funding actions, exact-note cancellation, exact-note successor recovery, terminal states, and zero remaining liability. A fresh public E3 Recovery Drill completed through the canonical app; its succeeded claim moved the vault to `CLAIMED` and a fresh Ready X read proved the successor balance increased from `7 STRK` to `8 STRK`. The founder-controlled wallets share historical public funding correlation, so this is E3 product evidence, not proof of historically unrelated participants or E4 independent completion.
+
+An assisted external owner-successor claim also succeeded on September 5, 2026.
+Its `CLAIMED` state and zero remaining liability were independently verified;
+the user subsequently confirmed `1 STRK` visible in the successor's private
+account. The external private balance is user-reported, not agent-read, and the
+assisted journey does not establish unassisted cold-user E4 completion. Its
+private identifiers are not included in the published receipt set.
