@@ -43,7 +43,7 @@ No test below needs an RPC endpoint, browser extension, Mainnet wallet or secret
 From the upstream `sdk` directory:
 
 ```sh
-npm install --ignore-scripts --no-audit --no-fund
+npm ci --ignore-scripts --no-audit --no-fund
 npx vitest run --coverage.enabled=false tests/internal/afterlight-fresh-wallet.test.ts
 ```
 
@@ -59,9 +59,12 @@ snforge 0.62.1. The upstream manifest specifies snforge_std 0.59.0 and Starknet
 are investigation evidence, not a release certification under a matched toolchain.
 The existing upstream `test_execute_open_subchannel` also passed.
 
-At this pin `npm ci --ignore-scripts` failed because the upstream lockfile was
-inconsistent (`Missing: sdk@0.14.3-rc.5 from lock file`). `npm install` was used only
-in the isolated reproduction checkout. No Afterlight dependencies were changed.
+An initial prefixed `npm ci` invocation reported
+`Missing: sdk@0.14.3-rc.5 from lock file`. A subsequent clean `npm ci` run directly
+from the upstream `sdk` directory succeeded with the unchanged upstream lockfile,
+and the SDK tests and strict TypeScript check passed again. Use that working
+directory and the command above. An intermediate `npm install` was confined to
+the isolated reproduction checkout. No Afterlight dependencies were changed.
 
 ## Remaining release gate
 
