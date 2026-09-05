@@ -26,8 +26,14 @@ function walletFeature(wallet: ReadyWallet): { walletVersion?: unknown; request?
   return wallet.features["starknet:walletApi"] as { walletVersion?: unknown; request?: unknown } | undefined;
 }
 
-export function detectReady(): { found: boolean; version?: string } {
-  const wallets = store.getWallets();
+export function detectReady(refreshIfMissing = false): { found: boolean; version?: string } {
+  let wallets = store.getWallets();
+  // One passive startup refresh catches legacy/late injected Ready providers.
+  // This discovers API availability only; it never requests accounts or signs.
+  if (refreshIfMissing && !findUsableReady(wallets)) {
+    store._refreshInjectedWallets();
+    wallets = store.getWallets();
+  }
   const wallet = findUsableReady(wallets)
     ?? wallets.find((candidate) => isRecognizedReadyName(candidate.name) && typeof walletFeature(candidate)?.request === "function")
     ?? wallets.find((candidate) => isRecognizedReadyName(candidate.name));
@@ -46,8 +52,9 @@ function findUsableReady(wallets: readonly ReadyWallet[]): ReadyWallet | undefin
 
 function findReady(refreshIfMissing: boolean): ReadyWallet | undefined {
   // Some extension builds still use the legacy Argent X identity, while newer
-  // releases register as Ready, Ready X, or Ready Wallet. Refresh only after
-  // an explicit connection attempt so ordinary renders do not repeatedly wrap
+  // releases register as Ready, Ready X, or Ready Wallet. Outside the single
+  // passive startup check, refresh only on an explicit connection attempt.
+  // Ordinary renders must not repeatedly wrap
   // unrelated late-injected providers and attach redundant event listeners.
   const discovered = findUsableReady(store.getWallets());
   if (discovered || !refreshIfMissing) return discovered;

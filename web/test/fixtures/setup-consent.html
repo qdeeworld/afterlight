@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Local setup consent interaction test</title><link rel="stylesheet" href="/src/style.css"></head>
+<body>
+  <main style="padding:24px">
+    <h1 style="font-size:2rem">Local interaction test</h1>
+    <p>No wallet, signature, network transaction or real reserve is used here.</p>
+    <button class="button primary" id="open">Show setup approval</button>
+    <button class="button secondary" id="theme">Switch appearance</button>
+    <p id="result" role="status">Not started</p>
+    <h2 style="font-size:1.4rem">320px layout</h2>
+    <iframe title="Narrow setup approval" src="?narrow=1" style="width:320px;height:760px;border:1px solid var(--line)"></iframe>
+  </main>
+  <script type="module">
+    import { openPrivateTokenSetupConsent } from '/src/setup-consent.ts';
+    const result = document.querySelector('#result');
+    async function show() {
+      result.textContent = 'Awaiting an explicit choice';
+      const prompt = openPrivateTokenSetupConsent();
+      result.textContent = await prompt.result ? 'Approved once — no transaction' : 'Cancelled — no transaction';
+    }
+    document.querySelector('#open').addEventListener('click', show);
+    document.querySelector('#theme').addEventListener('click', () => {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    });
+    if (new URL(location.href).searchParams.has('narrow')) {
+      document.querySelector('iframe').remove();
+      document.querySelector('h2').remove();
+      void show();
+    }
+  </script>
+</body>
+</html>

@@ -311,6 +311,8 @@ async function sha256ProofData(base64: string): Promise<string> {
   return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+export type ExitProgressStage = "destination" | "setup-consent" | "final-proof" | "verify-proof" | "sponsor" | "broadcast" | "confirmation";
+
 export async function prepareExitPackage(input: {
   ready: ReadySession;
   invitation: RecoveryInvitation;
@@ -322,8 +324,12 @@ export async function prepareExitPackage(input: {
   setupPolicy?: typeof ROLE_BOUND_SETUP_POLICY;
   /** Explicit, per-attempt consent. Never cached across wallets or vaults. */
   approveSetup?: () => boolean | Promise<boolean>;
+  onStage?: (stage: ExitProgressStage) => void;
+  /** Reject a wallet/key/invitation change across asynchronous preparation. */
+  assertContext?: () => void;
 }): Promise<Readonly<Record<string, unknown>>> {
   const { ready, invitation, vault, roleKey, action } = input;
+  input.assertContext?.();
   const cancel = action === "CANCEL_REFUND";
   const expectedState = cancel ? "1" : "2";
   const expectedNonce = cancel ? vault.ownerNonce : vault.successorNonce;
@@ -340,7 +346,9 @@ export async function prepareExitPackage(input: {
   };
   const actionBuilder = cancel ? buildCancelRefundActions : buildClaimActions;
   const sentinelActions = actionBuilder(CONTRACT, ready.address, sentinelArgs);
+  input.onStage?.("destination");
   const sentinelPrepared = await ready.prepare(sentinelActions, true);
+  input.assertContext?.();
   if (input.diagnosticOnly) {
     const report = inspectSimulatedExitWrites(sentinelPrepared);
     throw new Error(`Preparation check complete. No claim signed or submitted. Ready X ${ready.version}. Share this report privately with support: ${JSON.stringify(report)}`);
@@ -359,15 +367,23 @@ export async function prepareExitPackage(input: {
     }
     throw error;
   }
-  if (needsSetup && await input.approveSetup?.() !== true) {
-    throw new Error("Private token setup was not authorized. No claim was signed or submitted.");
+  if (needsSetup) {
+    input.onStage?.("setup-consent");
+    if (await input.approveSetup?.() !== true) {
+      throw new Error("Private token setup was not authorized. No claim was signed or submitted.");
+    }
   }
+  if (Math.floor(Date.now() / 1000) >= Number(expiry)) throw new Error("This preparation expired while waiting for approval. No claim was signed or submitted. Start recovery again to prepare a fresh destination.");
+  input.assertContext?.();
   const auth: Authorization = cancel
     ? { operation: "CANCEL_REFUND", base: { ...base(invitation.vaultId, invitation.ownerKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId } }
     : { operation: "CLAIM", base: { ...base(invitation.vaultId, invitation.successorKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId }, requested_at: vault.requestedAt, claim_after: vault.claimAfter };
   const signature = roleKey.sign(authorizationHash(auth));
   const signedArgs = { ...sentinelArgs, ...signature };
+  input.onStage?.("final-proof");
   const signedPrepared = await ready.prepare(actionBuilder(CONTRACT, ready.address, signedArgs), false);
+  input.assertContext?.();
+  input.onStage?.("verify-proof");
   const facts = signedPrepared.proof.proof_facts;
   if (!Array.isArray(facts) || facts.length < 6) throw new Error("Ready returned incomplete proof facts.");
   if (needsSetup && BigInt(facts[0]!) !== BigInt(shortString.encodeShortString("PROOF1"))) {
@@ -411,11 +427,13 @@ export async function prepareExitPackage(input: {
   };
   if (needsSetup) {
     body.setupPolicy = ROLE_BOUND_SETUP_POLICY;
+    const setupHash = setupAuthorizationHash(await sha256Canonical(body));
+    input.assertContext?.();
     // Sign only after validation of the final proof package. Keeping consent
     // outside the proved call avoids a circular proof/signature dependency.
     body.setupAuthorization = Object.freeze({
       schema: SETUP_AUTHORIZATION_SCHEMA,
-      ...roleKey.sign(setupAuthorizationHash(await sha256Canonical(body))),
+      ...roleKey.sign(setupHash),
     });
   }
   const prepared = bound.prepared as unknown as { call: unknown; proof: { data: string; output: unknown; proof_facts: unknown } };
@@ -431,6 +449,7 @@ export async function prepareExitPackage(input: {
 
 export async function submitExitPackage(
   exitPackage: Readonly<Record<string, unknown>>,
+  onStage?: (stage: ExitProgressStage) => void,
 ): Promise<{ transactionHash: string; actualFeeFri?: string }> {
   type ExitResponse = {
     status?: string;
@@ -458,6 +477,7 @@ export async function submitExitPackage(
     return { response, body: await response.json() as ExitResponse };
   };
 
+  onStage?.("sponsor");
   const prepared = await post("prepare");
   if (
     !prepared.response.ok ||
@@ -469,6 +489,7 @@ export async function submitExitPackage(
     throw exitResponseError(prepared.body);
   }
   const expectedHash = num.toHex(BigInt(prepared.body.result.transactionHash));
+  onStage?.("broadcast");
   try {
     const broadcast = await provider.invokeSignedTx(
       prepared.body.result.signedTransaction as Parameters<typeof provider.invokeSignedTx>[0],
@@ -482,6 +503,7 @@ export async function submitExitPackage(
     // preserves the retained package for an exact retry.
   }
 
+  onStage?.("confirmation");
   const { response, body } = await post("reconcile");
   const hashlessRelayedResult = isHashlessRelayedResult(
     body.status,

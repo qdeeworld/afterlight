@@ -297,6 +297,10 @@ dialog form { display: grid; gap: 18px; padding: 30px; }
 dialog h2 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 2.2rem; font-weight: 400; line-height: 1.02; }
 dialog p { margin: 0; color: var(--muted); line-height: 1.6; }
 dialog .button-row { justify-content: flex-end; }
+.setup-consent { width: min(600px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.setup-consent strong { color: var(--text); }
+.setup-consent .warning { font-size: 1rem; }
+.setup-consent .button-row { flex-wrap: wrap; }
 
 @keyframes pulse { 50% { opacity: .4; transform: scale(.75); } }
 @keyframes orbit-drift { to { transform: rotate(378deg); } }

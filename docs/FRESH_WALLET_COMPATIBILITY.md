@@ -1,9 +1,12 @@
 # Fresh successor wallet investigation
 
 Status: the bounded compatibility policy is implemented and reviewed. Runtime
-availability is advertised by `GET /health` under `setupSponsorship`; an
-external fresh-wallet recovery receipt is still unverified. Automated tests do
-not establish external completion.
+availability is advertised by `GET /health` under `setupSponsorship`. On September
+5, 2026, the external E4 claim was independently confirmed SUCCEEDED on Mainnet,
+with CLAIMED vault state and the 1 STRK liability settled. The external successor
+reported prior private activation and zero private STRK without a Shield deposit.
+Their private-wallet balance delta was not independently read by the building
+agent. One completed claim is not a guarantee of all fresh-wallet variants.
 
 ## Authorization preflight
 
@@ -85,7 +88,7 @@ external claim completion.
 
 ## Versioned role-bound setup policy
 
-The candidate policy `afterlight-role-bound-setup/1` accepts exactly one
+The released policy `afterlight-role-bound-setup/1` accepts exactly one
 protocol-valid token subchannel setup alongside the exact private exit. This
 deliberately does **not** assert that the encrypted setup belongs to the note's
 token or recipient. One unrelated valid token setup is within the amended

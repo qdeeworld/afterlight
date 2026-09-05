@@ -9,6 +9,10 @@ import { connectReady, detectReady, type ReadySession } from "./wallet.ts";
 import { ExitSubmissionError, exportEncryptedKey, fundRecoveryReserve, generateKey, hasPendingCheckpointReconciliation, isLegacyPlaintextKeyBackup, prepareExitPackage, relayControl, restoreEncryptedKey, restoreKey, submitControlDirect, submitExitPackage } from "./operations.ts";
 import { isThemePreference, resolveTheme, type ThemePreference } from "./theme.ts";
 import { requestSponsorCapacity, type SponsorCapacity } from "./capacity.ts";
+import { openPrivateTokenSetupConsent, type SetupConsentPrompt } from "./setup-consent.ts";
+import { checkSettledBalance, exitProgressCopy } from "./exit-progress.ts";
+import type { ExitProgressStage } from "./operations.ts";
+import { successorRecoveryGuidance } from "./recovery-guidance.ts";
 import { isExplicitWalletRejection, parsePendingFundingAttempt, withAvailableExclusiveLock, type AvailableLockManager, type PendingFundingAttempt } from "./funding-attempt.ts";
 import { assertInvitationMatchesVault, bindVerifiedVault, snapshotForInvitation, type VerifiedVaultRecord } from "./vault-verification.ts";
 import type { LocalStarkKey } from "../../client/src/keys.ts";
@@ -168,8 +172,51 @@ async function refreshSponsorCapacity(): Promise<SponsorCapacity> {
 
 let setupPolicy: SponsorCapacity["setupPolicy"];
 
-function approvePrivateTokenSetup(): boolean {
-  return window.confirm("Ready included one private token setup with this recovery. The sponsor pays the claim fees; no Shield deposit is needed. Your local key will authorize the exact final package, still limited to the reserve's 1 STRK. The setup is encrypted, so Afterlight cannot verify whether it belongs to this STRK destination. Allow this bounded setup?");
+let setupConsentPrompt: SetupConsentPrompt | undefined;
+let restoreExitFocus = false;
+let settledBalance: { vaultId: string; wallet: string; before: bigint; action: "CLAIM" | "CANCEL_REFUND" } | undefined;
+
+function hasCurrentSettledBalance(): boolean {
+  const parsed = parseInvitation(invitationText);
+  const snapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
+  return Boolean(settledBalance && ready?.address === settledBalance.wallet && parsed.valid
+    && parsed.invitation.vaultId === settledBalance.vaultId && (snapshot?.state === "3" || snapshot?.state === "4"));
+}
+
+function showExitProgress(stage: ExitProgressStage): void {
+  notice = exitProgressCopy(stage);
+  render();
+}
+
+function captureExitContext() {
+  const context = { ready: ready!, key: applicationKey!, role, invitationText, loadedVault };
+  return {
+    ready: context.ready,
+    key: context.key,
+    assert: () => {
+      if (!context.ready || !context.key || !context.loadedVault || ready !== context.ready || applicationKey !== context.key
+        || role !== context.role || invitationText !== context.invitationText || loadedVault !== context.loadedVault) {
+        throw new Error("Wallet, key or invitation changed during preparation. Review this reserve before continuing; no new claim was submitted by this check.");
+      }
+    },
+  };
+}
+
+async function approvePrivateTokenSetup(assertContext: () => void): Promise<boolean> {
+  assertContext();
+  restoreExitFocus = true;
+  notice = "Ready’s first preparation is complete. Review the private token setup approval inside Afterlight to continue. No claim has been signed or submitted.";
+  render();
+  const prompt = openPrivateTokenSetupConsent();
+  setupConsentPrompt = prompt;
+  try {
+    const allowed = await prompt.result;
+    if (!allowed) return false;
+    assertContext();
+    return true;
+  } finally {
+    if (setupConsentPrompt === prompt) setupConsentPrompt = undefined;
+  }
 }
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
@@ -281,12 +328,13 @@ function journeySignal(): string {
     safe = current === "ACTIVE" ? "Reserve remains protected" : current === "GRACE" ? "Owner control remains live" : verifiedSnapshot ? "Invitation matches Mainnet state" : invitationValid ? "Invitation saved locally" : "No funds move before confirmation";
     next = current === "ACTIVE" ? "Heartbeat, cancel, or wait" : current === "GRACE" ? "First valid veto or claim wins" : verifiedSnapshot ? "Terminal state cannot replay" : "Exact cost appears before funding";
   } else {
-    if (!applicationKey || backupState !== "verified") now = "Secure your successor key";
-    else if (!invitationValid) now = "Import the recovery invitation";
-    else if (!verifiedSnapshot) now = "Read the live reserve";
-    else if (current === "ACTIVE") now = "Wait until inactivity expires";
-    else if (current === "GRACE") now = "Wait for grace, then recover";
-    else now = "Review the completed outcome";
+    now = successorRecoveryGuidance({
+      snapshot: verifiedSnapshot, invitationValid, keyVerified: Boolean(applicationKey) && backupState === "verified",
+      keyMatches: parsed.valid && roleKeyMatches(parsed.invitation), walletConnected: Boolean(ready), exitCapacity,
+      preparationRejected: parsed.valid && rejectedPreparationVault === parsed.invitation.vaultId,
+      pendingClaim: parsed.valid && pendingExit?.action === "CLAIM" && pendingExit.vaultId === parsed.invitation.vaultId,
+      nowSeconds: Math.floor(Date.now() / 1000),
+    }).now;
     const designatedKeyMatches = parsed.valid && verifiedSnapshot !== undefined && roleKeyMatches(parsed.invitation);
     safe = current === "CLAIMED" ? "Recovery settled exactly once" : designatedKeyMatches ? "Mainnet terms and your key match" : verifiedSnapshot ? "Mainnet terms verified; restore the right key" : invitationValid ? "Invitation format checked locally" : "Your secret stays on this device";
     next = current === "GRACE" ? "Claim binds one exact private note" : current === "ACTIVE" ? "Request opens the owner veto window" : verifiedSnapshot ? "Terminal state cannot replay" : "No wallet request before verification";
@@ -363,7 +411,7 @@ function ownerView(): string {
   return `<section class="journey recovery-chamber" data-role-view="owner" aria-labelledby="owner-heading">
     <header class="journey-heading"><div><p class="eyebrow">Owner path · Starknet Mainnet</p><h2 id="owner-heading">Create a recovery reserve</h2><p class="lede">Privately set aside 1 STRK. Stay in control while active and veto during the recovery window.</p></div><span class="journey-mode">${reserveMode === "NORMAL" ? "Long-term reserve" : "Recovery Drill"}<strong>1 STRK</strong></span></header>
     ${journeyProgress()}
-    <div class="journey-body">${walletRow()}
+    <div class="journey-body">${!liveSnapshot && fundingCapacity !== "ready" ? `<aside class="capacity-recovery" role="status"><strong>${fundingCapacity === "checking" ? "Checking new-reserve capacity" : "New reserves are temporarily paused"}</strong><p>Afterlight must have sponsor capacity before accepting a new reserve. Do not pay wallet setup costs for a new test until this check is ready. Existing reserves can still be viewed and controlled.</p><button class="button secondary" type="button" data-action="refresh-capacity" ${busy ? "disabled" : ""}>Check capacity again</button></aside>` : ""}${walletRow()}
     ${keyPanel("owner")}
     <div ${liveSnapshot ? "hidden" : ""}><form id="reserve-form" class="setup-form" data-ready="${canFund}"><div class="section-heading"><span class="step-number">03</span><div><strong>Choose the recovery terms</strong><p>Normal mode is the long-term default. The drill uses the same rules on a shorter clock.</p></div></div>
       <fieldset><legend>Choose a timing mode</legend><label class="choice ${reserveMode === "NORMAL" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="NORMAL" ${reserveMode === "NORMAL" ? "checked" : ""} /><span><strong>30 days + 7 days</strong><small>Long-term inactivity and grace</small></span></label><label class="choice ${reserveMode === "FAST_DEMO" ? "selected" : ""}"><input type="radio" name="reserve-mode" value="FAST_DEMO" ${reserveMode === "FAST_DEMO" ? "checked" : ""} /><span><strong>5 min + 5 min</strong><small>Clearly labelled Recovery Drill</small></span></label></fieldset>
@@ -385,6 +433,10 @@ function ownerView(): string {
 function successorView(): string {
   const parsed = parseInvitation(invitationText);
   const liveSnapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
+  if (parsed.valid && (liveSnapshot?.state === "3" || liveSnapshot?.state === "4")) {
+    const pendingReconciliation = pendingExit?.action === "CLAIM" && pendingExit.vaultId === parsed.invitation.vaultId;
+    return `<section class="journey recovery-chamber" data-role-view="successor" aria-labelledby="successor-heading"><header class="journey-heading"><div><h2 id="successor-heading">${liveSnapshot.state === "3" ? "Your recovery is settled" : "This reserve was returned"}</h2><p class="lede">This Mainnet result is final. No key restoration or new approval is needed to view it.</p></div></header><div class="journey-body">${pendingReconciliation ? `<p class="warning">A saved transaction still needs receipt reconciliation. Restore the same key below to reconcile that exact package; this does not create another claim.</p>${keyPanel("successor")}${walletRow()}` : ""}${controlPanel(parsed.invitation, liveSnapshot)}${!pendingReconciliation && ready ? walletRow() : ""}<details class="utility-panel"><summary>Wallet and invitation details</summary>${!pendingReconciliation && !ready ? walletRow() : ""}${invitationPanel(parsed, liveSnapshot)}</details></div></section>`;
+  }
   return `<section class="journey recovery-chamber" data-role-view="successor" aria-labelledby="successor-heading">
     <header class="journey-heading"><div><p class="eyebrow">Successor path · Starknet Mainnet</p><h2 id="successor-heading">Prepare to recover a reserve</h2><p class="lede">Generate your own per-vault key, verify the invitation, and request only after authenticated inactivity.</p></div><span class="journey-mode">Designated key<strong>Exact note only</strong></span></header>
     ${journeyProgress()}
@@ -404,6 +456,8 @@ function invitationPanel(parsed: ReturnType<typeof parseInvitation>, snapshot?: 
   const keyMatches = liveVerified && roleKeyMatches(parsed.invitation);
   const verificationCopy = !liveVerified
     ? "The fields match Afterlight's Mainnet format. Read the live vault next to confirm that it exists and its terms match onchain."
+    : snapshot?.state === "3" || snapshot?.state === "4"
+      ? "The invitation matches the settled Mainnet reserve. No further recovery authorization is needed."
     : keyMatches
       ? "The live contract, recovery terms and your restored successor key all match."
       : applicationKey
@@ -447,8 +501,8 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
     : !ready ? "Connect and unlock the successor's Ready X wallet."
     : !claimReady ? "Wait for the grace period to finish. The state refreshes automatically."
     : exitCapacity !== "ready" ? "Checking or waiting for sponsored recovery capacity. You do not need to reload this page."
-    : busy ? "Your request is processing. Check Ready X for a pending approval."
-    : "Wallet and key connected. Recovery still requires successful preparation and validation. The sponsor pays the claim fees; wallet setup is separate.";
+    : busy ? notice
+    : "Ready prepares the destination, then the final proof. If setup is needed, approve it here between those requests. Keep this tab open; do not click Recover again while it is processing.";
   const emergencyOperation = role === "owner" && current === "ACTIVE"
     ? "HEARTBEAT"
     : role === "owner" && current === "GRACE"
@@ -462,8 +516,8 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
     : current === "ACTIVE"
       ? formatDeadline(inactiveAt)
       : current;
-  const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note." : "The reserve returned privately to its owner.";
-  return `<section class="control-panel live-state" data-vault-state="${current}"><div class="state-beacon" aria-hidden="true"><span></span></div><div class="control-heading"><div><span class="state-chip">${current}</span><h3>${current === "ACTIVE" ? "Reserve protected" : current === "GRACE" ? "Owner still has control" : current === "CLAIMED" ? "Recovery complete" : "Reserve returned"}</h3><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault">Refresh state</button></div>
+  const stateCopy = current === "ACTIVE" ? "Protected and listening for an authenticated heartbeat." : current === "GRACE" ? claimReady ? "The grace period has ended. The successor may recover; the owner can still veto until settlement." : "Recovery requested. The owner can still veto before settlement." : current === "CLAIMED" ? "Recovery completed exactly once to the designated private note. Do not claim again." : "The reserve returned privately to its owner.";
+  return `<section class="control-panel live-state" data-vault-state="${current}"><div class="state-beacon" aria-hidden="true"><span></span></div><div class="control-heading"><div><span class="state-chip">${current}</span><h3>${current === "ACTIVE" ? "Reserve protected" : current === "GRACE" ? claimReady ? "Recovery window is open" : "Owner still has control" : current === "CLAIMED" ? "Recovery complete" : "Reserve returned"}</h3><p>${stateCopy}</p><small>Vault ${short(invitation.vaultId)} · epoch ${snapshot.epoch}</small></div><button class="text-button" data-action="load-vault" ${busy ? "disabled" : ""}>Refresh state</button></div>
     <div class="metrics"><div><span>Reserve</span><strong>1 STRK</strong></div><div><span>${timingLabel}</span><strong>${timingValue}</strong></div></div>
     ${role === "owner" ? `<div class="button-row"><button class="button secondary" type="button" data-action="download-current-invitation">Download recovery invitation</button></div>` : ""}
     ${restoredWrongKey ? `<p class="error">The restored ${role} key does not match this reserve. Restore the designated key backup before acting.</p>` : ""}
@@ -485,7 +539,7 @@ function statusPanel(): string {
   const parsed = parseInvitation(invitationText);
   const liveSnapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
   const current = liveSnapshot ? stateName(liveSnapshot.state) : "Not loaded";
-  const headline = current === "CLAIMED" ? "Recovery complete" : current === "CANCELLED" ? "Reserve returned" : current === "GRACE" ? "Owner still has control" : current === "ACTIVE" ? "Reserve protected" : "Private by design";
+  const headline = current === "CLAIMED" ? "Recovery complete" : current === "CANCELLED" ? "Reserve returned" : current === "GRACE" ? Math.floor(Date.now() / 1000) >= Number(liveSnapshot?.claimAfter) ? "Recovery window is open" : "Owner still has control" : current === "ACTIVE" ? "Reserve protected" : "Private by design";
   const contextualReceipts = receipts
     .filter((item) => !parsed.valid || item.vaultId === undefined || item.vaultId === parsed.invitation.vaultId)
     .slice(0, 3);
@@ -496,6 +550,9 @@ function statusPanel(): string {
 }
 
 function render(): void {
+  // Wallet/network, invitation or role changes invalidate pending consent.
+  // Resolve closed, rather than leaving an orphaned promise or reusing approval.
+  setupConsentPrompt?.cancel();
   const reconcilingCancellation = pendingExit?.action === "CANCEL_REFUND";
   app.innerHTML = `<div class="ambient-glow" aria-hidden="true"></div><header class="site-header"><a class="brand" href="/"><span aria-hidden="true"><i></i></span>Afterlight</a><div class="header-tools"><label class="theme-control"><span>Appearance</span><select data-theme-preference aria-label="Appearance"><option value="system" ${themePreference === "system" ? "selected" : ""}>System</option><option value="light" ${themePreference === "light" ? "selected" : ""}>Light</option><option value="dark" ${themePreference === "dark" ? "selected" : ""}>Dark</option></select></label><div class="network"><span aria-hidden="true"></span><strong>Mainnet</strong><small>Starknet</small></div></div></header>
   <main id="main"><section class="intro"><div class="intro-copy"><p class="kicker">Private recovery, under your control</p><h1>A reserve that waits for the person you trust.</h1><p>Fund privately. Stay present through heartbeat and veto. If you go inactive, only the designated successor key can authorize recovery to one exact private note.</p></div><div class="afterlight-orbit" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="orbit-core"></span><small>protected<br />until needed</small></div></section>
@@ -507,6 +564,12 @@ function render(): void {
   <footer><span>Recovery infrastructure, not legal inheritance automation.</span><div><span>Built with STRK20 on Starknet</span><a href="https://github.com/qdeeworld/afterlight">Open source contract ↗</a></div></footer>
   <dialog id="cancel-dialog" aria-labelledby="cancel-title" aria-describedby="cancel-description"><form method="dialog"><p class="eyebrow">Private return</p><h2 id="cancel-title">${reconcilingCancellation ? "Reconcile the pending return?" : "Cancel this reserve?"}</h2><p id="cancel-description">${reconcilingCancellation ? "Afterlight will resubmit the exact retained package only to reconcile its receipt. No new note or authorization is prepared." : "Its 1 STRK principal returns to this Ready X private balance. The reserve cannot be recovered afterward."}</p><div class="button-row"><button class="button secondary" type="button" data-action="dismiss-cancel">${reconcilingCancellation ? "Not now" : "Keep reserve active"}</button><button class="button danger" type="button" data-action="confirm-cancel">${reconcilingCancellation ? "Reconcile exact package" : "Cancel and return 1 STRK"}</button></div></form></dialog>`;
   bindEvents();
+  document.querySelectorAll<HTMLButtonElement>("[data-role]").forEach((button) => { button.disabled = busy; });
+  if (!busy && restoreExitFocus) {
+    restoreExitFocus = false;
+    const target = document.querySelector<HTMLButtonElement>('[data-action="claim"]:not(:disabled), [data-action="cancel-refund"]:not(:disabled), [data-action="load-vault"]:not(:disabled)');
+    target?.focus({ preventScroll: true });
+  }
 }
 
 function fail(error: unknown): void {
@@ -552,6 +615,7 @@ function bindEvents(): void {
     applyTheme();
   });
   document.querySelectorAll<HTMLButtonElement>("[data-role]").forEach((button) => button.addEventListener("click", () => {
+    if (busy) return;
     const nextRole = button.dataset.role === "successor" ? "successor" : "owner";
     if (nextRole === role) return;
     if (applicationKey && backupState !== "verified") {
@@ -583,13 +647,34 @@ function bindEvents(): void {
         throw error;
       }
     }
+    const balanceSession = ready;
     try {
-      privateBalance = await ready.balance(STRK);
+      const balance = await balanceSession.balance(STRK);
+      if (ready !== balanceSession) {
+        notice = "Ready account or network changed during the balance check. Reconnect to continue; the previous balance was not used.";
+        return;
+      }
+      privateBalance = balance;
       walletStatus = "connected";
     } catch (error) {
+      if (ready !== balanceSession) {
+        notice = "Ready account or network changed during the balance check. Reconnect to continue.";
+        return;
+      }
       walletStatus = "connected";
       privateBalance = undefined;
+      if (hasCurrentSettledBalance()) {
+        notice = "The reserve is already settled on Mainnet. Ready could not refresh the private balance. No new recovery is needed; try Refresh balance when the wallet is available.";
+        return;
+      }
       throw error;
+    }
+    if (settledBalance && hasCurrentSettledBalance()) {
+      const matches = privateBalance === settledBalance.before + 10n ** 18n;
+      notice = matches
+        ? `Mainnet settlement and the exact 1 STRK private-balance increase are confirmed. Current balance: ${strk(privateBalance)}.`
+        : `The reserve is settled on Mainnet. Current private balance: ${strk(privateBalance)}. The expected increase is not confirmed by this read; do not recover again.`;
+      return;
     }
     notice = `Ready X connected. Private balance: ${strk(privateBalance)}.`;
   }));
@@ -857,6 +942,7 @@ function bindEvents(): void {
     const snapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
     if (!parsed.valid || !snapshot || !ready || !applicationKey) throw new Error("Connect Ready X and restore the verified vault and designated owner key first.");
     if (!hasVerifiedRoleKey(parsed.invitation)) throw new Error("Restore and verify the designated owner key backup before returning this reserve.");
+    const context = captureExitContext();
     const retained = pendingExit?.action === "CANCEL_REFUND" && pendingExit.vaultId === parsed.invitation.vaultId
       ? pendingExit
       : undefined;
@@ -864,17 +950,19 @@ function bindEvents(): void {
       await refreshSponsorCapacity();
       if (exitCapacity !== "ready") throw new Error("Private cancellation is paused until sponsor exit capacity is restored.");
     }
-    const balanceBefore = retained === undefined ? await ready.balance(STRK) : BigInt(retained.balanceBefore);
+    const balanceBefore = retained === undefined ? await context.ready.balance(STRK) : BigInt(retained.balanceBefore);
+    context.assert();
     let exitPackage = retained?.exitPackage;
     if (exitPackage === undefined) {
       notice = "Ready X will prepare one exact private return note. The sponsor signs the bounded transaction, then this browser broadcasts it independently."; render();
-      exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CANCEL_REFUND", setupPolicy, approveSetup: approvePrivateTokenSetup });
+      exitPackage = await prepareExitPackage({ ready: context.ready, invitation: parsed.invitation, vault: snapshot, roleKey: context.key, action: "CANCEL_REFUND", setupPolicy, approveSetup: () => approvePrivateTokenSetup(context.assert), onStage: showExitProgress, assertContext: context.assert });
       retainPendingExit({ action: "CANCEL_REFUND", vaultId: parsed.invitation.vaultId, exitPackage, balanceBefore: balanceBefore.toString() });
     }
     notice = retained ? "Reconciling the exact pending private return. No new note or authorization is being created." : "Owner authorization and exact return note verified. Requesting the bounded sponsor signature…"; render();
     let result;
     try {
-      result = await submitExitPackage(exitPackage);
+      context.assert();
+      result = await submitExitPackage(exitPackage, showExitProgress);
     } catch (error) {
       if (error instanceof ExitSubmissionError && !error.ambiguous) retainPendingExit(undefined);
       throw error;
@@ -883,10 +971,17 @@ function bindEvents(): void {
     recordReceipt(result.transactionHash, "Reserve returned privately", parsed.invitation.vaultId);
     const refreshed = await readVerifiedVault(parsed.invitation);
     loadedVault = bindVerifiedVault(parsed.invitation, refreshed);
-    privateBalance = await ready.balance(STRK);
     if (refreshed.state !== "4") throw new Error("The transaction succeeded but the vault is not CANCELLED. Do not retry.");
-    if (privateBalance !== balanceBefore + 1n * 10n ** 18n) throw new Error("The vault is CANCELLED, but the expected 1 STRK shielded-balance increase is not visible yet. Refresh Ready X; do not retry.");
-      notice = `Reserve returned privately. Your shielded balance increased from ${strk(balanceBefore)} to ${strk(privateBalance)}.`;
+    settledBalance = { vaultId: parsed.invitation.vaultId, wallet: context.ready.address, before: balanceBefore, action: "CANCEL_REFUND" };
+    notice = "Reserve return confirmed on Mainnet. Checking your private balance…"; render();
+    const balanceCheck = await checkSettledBalance(() => {
+      if (ready !== context.ready) throw new Error("Wallet changed after settlement");
+      return context.ready.balance(STRK);
+    }, balanceBefore, () => ready === context.ready);
+    privateBalance = balanceCheck.balance;
+    notice = balanceCheck.confirmed
+      ? `Reserve returned privately. Your shielded balance increased from ${strk(balanceBefore)} to ${strk(privateBalance!)}.`
+      : "Reserve return confirmed on Mainnet. Private balance confirmation is pending. Use Refresh balance when Ready is available; do not return the reserve again.";
     });
   });
   document.querySelector<HTMLButtonElement>("[data-action=claim]")?.addEventListener("click", () => void run(async () => {
@@ -894,6 +989,7 @@ function bindEvents(): void {
     const snapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
     if (!parsed.valid || !snapshot || !ready || !applicationKey) throw new Error("Connect Ready X and restore the verified vault and designated successor key first.");
     if (!hasVerifiedRoleKey(parsed.invitation)) throw new Error("Restore and verify the designated successor key backup before recovering this reserve.");
+    const context = captureExitContext();
     if (new URLSearchParams(location.search).get("diagnoseExit") === "1") {
       if (pendingExit) throw new Error("A pending exit must be reconciled before any preparation diagnostic.");
       notice = "Checking simulated preparation only. No claim will be signed or submitted.";
@@ -908,17 +1004,19 @@ function bindEvents(): void {
       await refreshSponsorCapacity();
       if (exitCapacity !== "ready") throw new Error("Private recovery is paused until sponsor exit capacity is restored.");
     }
-    const balanceBefore = retained === undefined ? await ready.balance(STRK) : BigInt(retained.balanceBefore);
+    const balanceBefore = retained === undefined ? await context.ready.balance(STRK) : BigInt(retained.balanceBefore);
+    context.assert();
     let claimPackage = retained?.exitPackage;
     if (claimPackage === undefined) {
       notice = "Ready X will prepare the exact private destination twice. The sponsor signs the bounded transaction, then this browser broadcasts it independently."; render();
-      claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CLAIM", setupPolicy, approveSetup: approvePrivateTokenSetup });
+      claimPackage = await prepareExitPackage({ ready: context.ready, invitation: parsed.invitation, vault: snapshot, roleKey: context.key, action: "CLAIM", setupPolicy, approveSetup: () => approvePrivateTokenSetup(context.assert), onStage: showExitProgress, assertContext: context.assert });
       retainPendingExit({ action: "CLAIM", vaultId: parsed.invitation.vaultId, exitPackage: claimPackage, balanceBefore: balanceBefore.toString() });
     }
     notice = retained ? "Reconciling the exact pending private claim. No new note or authorization is being created." : "Exact destination and designated-key authorization verified. Requesting the bounded sponsor signature…"; render();
     let result;
     try {
-      result = await submitExitPackage(claimPackage);
+      context.assert();
+      result = await submitExitPackage(claimPackage, showExitProgress);
     } catch (error) {
       if (error instanceof ExitSubmissionError && !error.ambiguous) retainPendingExit(undefined);
       throw error;
@@ -927,10 +1025,17 @@ function bindEvents(): void {
     recordReceipt(result.transactionHash, "Recovery completed privately", parsed.invitation.vaultId);
     const refreshed = await readVerifiedVault(parsed.invitation);
     loadedVault = bindVerifiedVault(parsed.invitation, refreshed);
-    privateBalance = await ready.balance(STRK);
     if (refreshed.state !== "3") throw new Error("The transaction succeeded but the vault is not CLAIMED. Do not retry.");
-    if (privateBalance !== balanceBefore + 1n * 10n ** 18n) throw new Error("The vault is CLAIMED, but the expected 1 STRK shielded-balance increase is not visible yet. Refresh Ready X; do not retry the claim.");
-    notice = `Recovery complete. Your shielded balance increased from ${strk(balanceBefore)} to ${strk(privateBalance)}.`;
+    settledBalance = { vaultId: parsed.invitation.vaultId, wallet: context.ready.address, before: balanceBefore, action: "CLAIM" };
+    notice = "Recovery confirmed on Mainnet. Checking your private balance…"; render();
+    const balanceCheck = await checkSettledBalance(() => {
+      if (ready !== context.ready) throw new Error("Wallet changed after settlement");
+      return context.ready.balance(STRK);
+    }, balanceBefore, () => ready === context.ready);
+    privateBalance = balanceCheck.balance;
+    notice = balanceCheck.confirmed
+      ? `Recovery complete. Your shielded balance increased from ${strk(balanceBefore)} to ${strk(privateBalance!)}.`
+      : "Recovery confirmed on Mainnet. Private balance confirmation is pending. Use Refresh balance when Ready is available; do not claim again.";
   }));
 }
 
@@ -964,7 +1069,7 @@ void run(async () => {
     exitCapacity = "unknown";
     fundingCapacity = "unknown";
   }
-  const detection = detectReady();
+  const detection = detectReady(true);
   walletStatus = detection.found ? "available" : "missing";
   notice = detection.found ? `Ready X ${detection.version ?? ""} detected. No wallet request was made.` : "Ready X was not detected. Mobile Ready and Braavos cannot provide Afterlight's STRK20 browser API; use the unlocked Ready X desktop extension.";
 });
@@ -1005,7 +1110,7 @@ async function refreshLiveStateQuietly(): Promise<void> {
 }
 const liveStateTimer = window.setInterval(() => void refreshLiveStateQuietly(), 15_000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) void refreshLiveStateQuietly(); });
-window.addEventListener("beforeunload", () => { window.clearInterval(liveStateTimer); applicationKey?.destroy(); });
+window.addEventListener("beforeunload", () => { setupConsentPrompt?.cancel(); window.clearInterval(liveStateTimer); applicationKey?.destroy(); });
 colorScheme.addEventListener("change", () => {
   if (themePreference === "system") applyTheme();
 });

@@ -4,8 +4,10 @@
 
 This is the Ready X flow implemented by the public Afterlight interface and
 exercised by the deployed Mainnet mechanism. The contract and a complete
-founder-operated E3 lifecycle through the public interface exist. An unrelated
-owner-successor E4 completion remains pending. Nothing in this document is a
+founder-operated E3 lifecycle through the public interface exist. The unrelated
+owner-successor E4 claim also succeeded on Mainnet on September 5, 2026; its
+CLAIMED state and liability settlement were independently verified. The external
+private-wallet balance delta was not independently read. Nothing here is a
 standing instruction to fund or sign; users must review the live wallet request
 and current fees.
 
@@ -31,10 +33,19 @@ Private activation is separate from shielding a token. An account can be
 registered and still have zero private STRK and an uninitialized STRK
 subchannel. Do not repeat activation or recommend a Shield deposit merely
 because Afterlight rejects a prepared-action shape. The versioned
-[first-use compatibility policy](FRESH_WALLET_COMPATIBILITY.md) aims to sponsor
+[first-use compatibility policy](FRESH_WALLET_COMPATIBILITY.md) sponsors
 that token setup alongside recovery when the live sponsor advertises support.
-An authentic external zero-to-one private-balance claim remains the required
-end-to-end verification; local tests are not a substitute.
+The E4 claim confirms the onchain exit for the reported activated/zero-balance
+case. Always confirm the private-wallet balance separately; local tests and a
+proof-preparation approval are not a receipt or a balance confirmation.
+
+Afterlight labels Ready's destination preparation and final proof preparation
+separately. If first-use token setup is present, an in-page approval appears
+between them; dismissing it signs nothing. A wallet/key/invitation change cancels
+pending consent. The app then shows sponsor, submission and confirmation stages.
+Keep the tab open, and do not restart recovery while it is processing. A confirmed
+Mainnet recovery remains complete even while Ready's private balance refresh is
+pending. New-reserve capacity is checked before users need to pay setup costs.
 
 The public app requires the Ready X desktop browser extension at `5.33.9` or a
 later compatible Ready `5.x` release and verifies the Wallet API capabilities

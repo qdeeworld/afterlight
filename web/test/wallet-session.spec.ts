@@ -2,7 +2,7 @@ import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { RpcProvider } from "starknet";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAIN_ID, STRK } from "../src/config.ts";
-import { connectReady, type ReadySession } from "../src/wallet.ts";
+import { connectReady, detectReady, type ReadySession } from "../src/wallet.ts";
 import { ReadyAuthorizationError } from "../src/wallet-request.ts";
 
 const mocks = vi.hoisted(() => ({
@@ -82,6 +82,20 @@ function expectNoBroadcast(): void {
 }
 
 describe("Ready connection", () => {
+  it("discovers a late injected Ready at startup without requesting accounts", () => {
+    mocks.getWallets.mockReturnValueOnce([]).mockReturnValue([wallet]);
+    expect(detectReady(true)).toEqual({ found: true, version: "5.33.9" });
+    expect(mocks.refreshInjectedWallets).toHaveBeenCalledOnce();
+    expect(mocks.request).not.toHaveBeenCalled();
+    expectNoBroadcast();
+  });
+
+  it("does not rewrap a detected wallet during ordinary renders", () => {
+    expect(detectReady(true).found).toBe(true);
+    expect(detectReady().found).toBe(true);
+    expect(mocks.refreshInjectedWallets).not.toHaveBeenCalled();
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
   it("requests interactive authorization, then silently confirms the selected Mainnet account", async () => {
     mocks.request.mockResolvedValueOnce(["0x000123"]);
     const onChanged = vi.fn();

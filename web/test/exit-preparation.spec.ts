@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { constants, ec, hash, shortString } from "starknet";
 import type { STRK20_ACTION } from "@starknet-io/types-js";
 import { LocalStarkKey } from "../../client/src/keys.ts";
 import { PINNED_STRK20_POOL_CLASS_HASH, type PreparedCallAndProof } from "../../client/src/actions.ts";
 import { ROLE_BOUND_SETUP_POLICY, SETUP_AUTHORIZATION_SCHEMA, setupAuthorizationHash } from "../../client/src/setup-authorization.mjs";
-import { AMOUNT_FRI, CHAIN_ID, CONTRACT, POOL, STRK } from "../src/config.ts";
+import { AMOUNT_FRI, AUTH_TTL_SECONDS, CHAIN_ID, CONTRACT, POOL, STRK } from "../src/config.ts";
 import type { RecoveryInvitation, VaultSnapshot } from "../src/model.ts";
 import type { ReadySession } from "../src/wallet.ts";
+import { openPrivateTokenSetupConsent } from "../src/setup-consent.ts";
 
 vi.mock("../src/chain.ts", () => ({
   provider: {
@@ -23,6 +24,7 @@ beforeAll(async () => {
   vi.stubGlobal("sessionStorage", { getItem: () => null, setItem: vi.fn(), removeItem: vi.fn() });
   ({ prepareExitPackage } = await import("../src/operations.ts"));
 });
+afterEach(() => vi.restoreAllMocks());
 
 // Synthetic prepared actions, NOT an authentic privacy proof. These tests prove
 // browser policy/consent sequencing and exact bytes only, never Mainnet receipt.
@@ -86,7 +88,212 @@ function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
 describe("first-use browser exit preparation", () => {
+  it.each([true, false])("reports preparation stages in order with setup=%s", async (setup) => {
+    const input = fixture(setup);
+    const stages: string[] = [];
+    const sign = vi.spyOn(input.roleKey, "sign");
+    vi.mocked(input.ready.prepare).mockImplementation(async (actions, simulate) => {
+      expect(stages.at(-1)).toBe(simulate ? "destination" : "final-proof");
+      expect(sign).toHaveBeenCalledTimes(simulate ? 0 : 1);
+      return prepared(actions, simulate, setup);
+    });
+    const approveSetup = vi.fn(() => {
+      expect(stages.at(-1)).toBe("setup-consent");
+      expect(sign).not.toHaveBeenCalled();
+      return true;
+    });
+    await prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup,
+      onStage: (stage) => stages.push(stage),
+    });
+    expect(stages).toEqual(setup
+      ? ["destination", "setup-consent", "final-proof", "verify-proof"]
+      : ["destination", "final-proof", "verify-proof"]);
+    expect(approveSetup).toHaveBeenCalledTimes(setup ? 1 : 0);
+    input.roleKey.destroy();
+  });
+
+  it.each(["sentinel", "final"] as const)("rejects a context change during %s preparation before further signing", async (phase) => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const entered = deferred<void>();
+    const resume = deferred<void>();
+    const stages: string[] = [];
+    let contextValid = true;
+    const assertContext = () => { if (!contextValid) throw new Error("attempt context changed"); };
+    vi.mocked(input.ready.prepare).mockImplementation(async (actions, simulate) => {
+      if (simulate === (phase === "sentinel")) {
+        entered.resolve();
+        await resume.promise;
+      }
+      return prepared(actions, simulate, true);
+    });
+    const approveSetup = vi.fn(() => true);
+    const pending = prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup, assertContext,
+      onStage: (stage) => stages.push(stage),
+    });
+    const rejected = expect(pending).rejects.toThrow(/attempt context changed/);
+    await entered.promise;
+    expect(sign).toHaveBeenCalledTimes(phase === "sentinel" ? 0 : 1);
+    contextValid = false;
+    resume.resolve();
+    await rejected;
+    expect(sign).toHaveBeenCalledTimes(phase === "sentinel" ? 0 : 1);
+    expect(input.ready.prepare).toHaveBeenCalledTimes(phase === "sentinel" ? 1 : 2);
+    expect(approveSetup).toHaveBeenCalledTimes(phase === "sentinel" ? 0 : 1);
+    expect(stages).toEqual(phase === "sentinel" ? ["destination"] : ["destination", "setup-consent", "final-proof"]);
+    expect(input.ready.invoke).not.toHaveBeenCalled();
+    expect(input.ready.invokePublic).not.toHaveBeenCalled();
+    input.roleKey.destroy();
+  });
+
+  it("checks context after hashing the policy-bearing package and before setup signing", async () => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    let contextValid = true;
+    const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+    let unsigned: Record<string, unknown> | undefined;
+    const hashDigest = vi.spyOn(crypto.subtle, "digest").mockImplementation(async (algorithm, data) => {
+      if (unsigned === undefined) {
+        unsigned = JSON.parse(new TextDecoder().decode(data)) as Record<string, unknown>;
+        contextValid = false;
+      }
+      return originalDigest(algorithm, data);
+    });
+    await expect(prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup: () => true,
+      assertContext: () => { if (!contextValid) throw new Error("attempt context changed"); },
+    })).rejects.toThrow(/attempt context changed/);
+    expect(unsigned).toMatchObject({ schema: "afterlight-prepared-neutral-exit/2", setupPolicy: ROLE_BOUND_SETUP_POLICY });
+    expect(unsigned).not.toHaveProperty("setupAuthorization");
+    expect(unsigned).not.toHaveProperty("locks");
+    expect(hashDigest).toHaveBeenCalledOnce();
+    expect(sign).toHaveBeenCalledTimes(1);
+    input.roleKey.destroy();
+  });
+
+  it("expires an approval wait at its deadline without signing or preparing a final proof", async () => {
+    const startMs = Date.UTC(2026, 0, 1);
+    const now = vi.spyOn(Date, "now").mockReturnValue(startMs);
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const entered = deferred<void>();
+    const decision = deferred<boolean>();
+    const stages: string[] = [];
+    const pending = prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY,
+      approveSetup: () => { entered.resolve(); return decision.promise; },
+      onStage: (stage) => stages.push(stage),
+    });
+    const rejected = expect(pending).rejects.toThrow(/expired while waiting for approval/);
+    await entered.promise;
+    now.mockReturnValue(startMs + AUTH_TTL_SECONDS * 1_000);
+    decision.resolve(true);
+    await rejected;
+    expect(sign).not.toHaveBeenCalled();
+    expect(input.ready.prepare).toHaveBeenCalledTimes(1);
+    expect(stages).toEqual(["destination", "setup-consent"]);
+    input.roleKey.destroy();
+  });
+
+  it("keeps both local signatures and final preparation pending until async approval", async () => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const entered = deferred<void>();
+    const decision = deferred<boolean>();
+    const approveSetup = vi.fn(() => { entered.resolve(); return decision.promise; });
+    const pending = prepareExitPackage({ ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup });
+    await entered.promise;
+    expect(sign).not.toHaveBeenCalled();
+    expect(input.ready.prepare).toHaveBeenCalledTimes(1);
+    expect(input.ready.invoke).not.toHaveBeenCalled();
+    expect(input.ready.invokePublic).not.toHaveBeenCalled();
+    decision.resolve(true);
+    await expect(pending).resolves.toMatchObject({ schema: "afterlight-prepared-neutral-exit/2" });
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect(input.ready.prepare).toHaveBeenCalledTimes(2);
+    expect(approveSetup).toHaveBeenCalledOnce();
+    input.roleKey.destroy();
+  });
+
+  it.each(["cancel", "reject"] as const)("stays unsigned when pending async approval is %s", async (outcome) => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const entered = deferred<void>();
+    const decision = deferred<boolean>();
+    const stages: string[] = [];
+    const pending = prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY,
+      approveSetup: () => { entered.resolve(); return decision.promise; },
+      onStage: (stage) => stages.push(stage),
+    });
+    const rejected = expect(pending).rejects.toThrow(outcome === "cancel" ? /not authorized/ : /approval invalidated/);
+    await entered.promise;
+    expect(sign).not.toHaveBeenCalled();
+    if (outcome === "cancel") decision.resolve(false);
+    else decision.reject(new Error("approval invalidated"));
+    await rejected;
+    expect(sign).not.toHaveBeenCalled();
+    expect(input.ready.prepare).toHaveBeenCalledTimes(1);
+    expect(input.ready.invoke).not.toHaveBeenCalled();
+    expect(input.ready.invokePublic).not.toHaveBeenCalled();
+    expect(stages).toEqual(["destination", "setup-consent"]);
+    input.roleKey.destroy();
+  });
+
+  it("requires fresh asynchronous consent after a previously approved attempt", async () => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const entered = deferred<void>();
+    const decision = deferred<boolean>();
+    const approveSetup = vi.fn<() => Promise<boolean>>()
+      .mockResolvedValueOnce(true)
+      .mockImplementationOnce(() => { entered.resolve(); return decision.promise; });
+    await prepareExitPackage({ ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup });
+    expect(sign).toHaveBeenCalledTimes(2);
+    const pending = prepareExitPackage({ ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY, approveSetup });
+    const rejected = expect(pending).rejects.toThrow(/not authorized/);
+    await entered.promise;
+    expect(approveSetup).toHaveBeenCalledTimes(2);
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect(input.ready.prepare).toHaveBeenCalledTimes(3);
+    decision.resolve(false);
+    await rejected;
+    expect(sign).toHaveBeenCalledTimes(2);
+    input.roleKey.destroy();
+  });
+
+  it("does not sign if opening the in-page modal fails", async () => {
+    const input = fixture();
+    const sign = vi.spyOn(input.roleKey, "sign");
+    const control = Object.assign(new EventTarget(), { focus: vi.fn() });
+    const dialog = Object.assign(new EventTarget(), {
+      open: false, setAttribute: vi.fn(), querySelector: () => control,
+      showModal: () => { throw new Error("modal unavailable"); }, remove: vi.fn(),
+    });
+    const doc = {
+      activeElement: null, createElement: () => dialog, body: { append: vi.fn() },
+    } as unknown as Document;
+    await expect(prepareExitPackage({
+      ...input, setupPolicy: ROLE_BOUND_SETUP_POLICY,
+      approveSetup: () => openPrivateTokenSetupConsent(doc).result,
+    })).rejects.toThrow(/could not open the setup approval/);
+    expect(sign).not.toHaveBeenCalled();
+    expect(input.ready.prepare).toHaveBeenCalledTimes(1);
+    expect(input.ready.invoke).not.toHaveBeenCalled();
+    expect(dialog.remove).toHaveBeenCalledOnce();
+    input.roleKey.destroy();
+  });
+
   it.each(["CLAIM", "CANCEL_REFUND"] as const)("binds complete final %s package after consent without a private deposit", async (action) => {
     const input = fixture(true, action);
     const sign = vi.spyOn(input.roleKey, "sign");
