@@ -34,6 +34,7 @@ let successorPublicKey = "";
 let invitationText = localStorage.getItem(INVITATION_STORAGE_KEY) ?? "";
 let loadedVault: VerifiedVaultRecord | undefined;
 let notice = "Loading the live Starknet Mainnet product…";
+let rejectedPreparationVault: string | undefined;
 let busy = false;
 let costAcknowledged = false;
 let backupState: "needed" | "downloaded" | "verified" = "needed";
@@ -429,13 +430,16 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
   const requestReady = current === "ACTIVE" && now >= inactiveAt;
   const claimReady = current === "GRACE" && now >= Number(snapshot.claimAfter);
   const diagnoseExit = new URLSearchParams(location.search).get("diagnoseExit") === "1";
-  const claimBlocker = !verifiedRoleKey
+  const preparationRejected = rejectedPreparationVault === invitation.vaultId;
+  const claimBlocker = preparationRejected
+    ? "Recovery preparation was rejected. No claim was submitted. Use the preparation-only check below; adding funds will not fix this error."
+    : !verifiedRoleKey
     ? "Restore your designated successor key backup to continue. Do not generate a new key."
     : !ready ? "Connect and unlock the successor's Ready X wallet."
     : !claimReady ? "Wait for the grace period to finish. The state refreshes automatically."
     : exitCapacity !== "ready" ? "Checking or waiting for sponsored recovery capacity. You do not need to reload this page."
     : busy ? "Your request is processing. Check Ready X for a pending approval."
-    : "Ready to recover. The sponsor pays the claim transaction fees; wallet setup is separate.";
+    : "Wallet and key connected. Recovery still requires successful preparation and validation. The sponsor pays the claim fees; wallet setup is separate.";
   const emergencyOperation = role === "owner" && current === "ACTIVE"
     ? "HEARTBEAT"
     : role === "owner" && current === "GRACE"
@@ -462,6 +466,7 @@ function controlPanel(invitation: RecoveryInvitation, snapshot?: VaultSnapshot):
     ${role === "successor" && current === "ACTIVE" ? `<button class="button primary" data-control="REQUEST" ${!verifiedRoleKey || !requestReady || busy ? "disabled" : ""}>${requestReady ? "Request recovery" : "Request opens after inactivity"}</button>` : ""}
     ${role === "successor" && current === "GRACE" && !pendingClaim ? `<button class="button primary" ${claimReady && ready && verifiedRoleKey && (diagnoseExit || exitCapacity === "ready") && !busy ? "" : "disabled"} data-action="claim">${diagnoseExit ? "Check preparation only — no claim" : exitCapacity === "exhausted" ? "Private recovery temporarily paused" : claimReady ? "Recover 1 STRK privately" : "Grace period is active"}</button>${!diagnoseExit && exitCapacity !== "ready" && claimReady ? `<p class="error">Private recovery is paused until sponsor exit capacity is restored.</p>${capacityRetryButton()}` : ""}` : ""}
     ${role === "successor" && current === "GRACE" ? `<p class="action-help" role="status">${escapeHtml(claimBlocker)}</p>` : ""}
+    ${role === "successor" && current === "GRACE" && preparationRejected ? `<button class="button secondary" data-action="inspect-exit" ${!verifiedRoleKey || !ready || busy ? "disabled" : ""}>Check preparation only — no claim</button>` : ""}
     <p class="action-help">Vault state refreshes automatically. Heartbeat, request and veto use your local signature through the neutral relayer. The Ready wallet address is not sent.</p>
     ${emergencyOperation ? `<details class="emergency-fallback"><summary>Emergency wallet submission</summary><p>This restores control if the neutral relayer is unavailable, but it publicly links this Ready wallet address to the vault. Use it only when availability matters more than unlinkability.</p><button class="button danger" data-direct-control="${emergencyOperation}" ${!verifiedRoleKey || !ready || busy ? "disabled" : ""}>Submit ${emergencyOperation.toLowerCase()} from Ready X publicly</button></details>` : ""}
   </section>`;
@@ -497,6 +502,10 @@ function render(): void {
 
 function fail(error: unknown): void {
   notice = error instanceof Error ? error.message : String(error);
+  if (notice.startsWith("prepared exit must contain exactly")) {
+    const parsed = parseInvitation(invitationText);
+    if (parsed.valid) rejectedPreparationVault = parsed.invitation.vaultId;
+  }
   busy = false;
   render();
 }
@@ -511,6 +520,15 @@ async function run(action: () => Promise<void>): Promise<void> {
 }
 
 function bindEvents(): void {
+  document.querySelector<HTMLButtonElement>("[data-action=inspect-exit]")?.addEventListener("click", () => void run(async () => {
+    const parsed = parseInvitation(invitationText);
+    const snapshot = parsed.valid ? matchingVaultSnapshot(parsed.invitation) : undefined;
+    if (!parsed.valid || !snapshot || !ready || !applicationKey || !hasVerifiedRoleKey(parsed.invitation)) throw new Error("Restore the designated successor key, verify the invitation and connect Ready X first.");
+    if (pendingExit) throw new Error("Reconcile the pending exit before running a diagnostic.");
+    notice = "Checking simulated preparation only. No claim will be signed or submitted.";
+    render();
+    await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CLAIM", diagnosticOnly: true });
+  }));
   document.querySelector<HTMLSelectElement>("[data-theme-preference]")?.addEventListener("change", (event) => {
     const value = (event.currentTarget as HTMLSelectElement).value;
     if (!isThemePreference(value)) return;
