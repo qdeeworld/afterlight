@@ -1,4 +1,5 @@
 import "./style.css";
+import { roleNavigationUrl } from "./navigation.ts";
 import { num } from "starknet";
 import { RELAYER_URL, STRK } from "./config.ts";
 import { assertMainnet, readLiability, readTransactionOutcome, readVault } from "./chain.ts";
@@ -549,7 +550,7 @@ function bindEvents(): void {
     applicationKey = undefined;
     backupState = "needed";
     loadedVault = undefined;
-    history.replaceState(null, "", `/?role=${role}`);
+    history.replaceState(null, "", roleNavigationUrl(location.href, role));
     render();
   }));
   document.querySelector<HTMLButtonElement>("[data-action=connect]")?.addEventListener("click", () => void run(async () => {

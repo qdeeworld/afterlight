@@ -4,6 +4,7 @@ import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
 import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
 import { isCompatibleReadyVersion, isRecognizedReadyName, isUsableReadyProvider } from "./compatibility.ts";
+import { walletRequest } from "./wallet-request.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -67,17 +68,16 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
   const feature = walletFeature(wallet);
   if (typeof feature?.request !== "function") throw new Error("Ready X does not expose its Wallet API.");
   if (!isCompatibleReadyVersion(feature.walletVersion)) throw new Error(`Ready X ${READY_MIN_VERSION} or a compatible Ready 5.x release is required; detected ${String(feature.walletVersion)}.`);
-  // This function runs only from the explicit Connect Ready X button. Use the
-  // interactive Wallet Standard flow so a profile that has not authorized
-  // Afterlight yet can actually approve the connection. Silent mode is only
-  // suitable for restoring an authorization that already exists.
-  const account = await WalletAccountV6.connect(provider, wallet as never);
-  const chainId = num.toHex(BigInt(await walletV6.requestChainId(wallet as never)));
-  const accounts = await walletV6.requestAccounts(wallet as never, true);
+  // Use the same Wallet API feature that detection and private operations use.
+  // An additional standard:connect wrapper is not needed for authorization.
+  const accounts = await walletRequest(walletV6.requestAccounts(wallet as never, false), "the connection request");
+  const chainId = num.toHex(BigInt(await walletRequest(walletV6.requestChainId(wallet as never), "the network check")));
   if (chainId !== CHAIN_ID) throw new Error("Switch Ready X to Starknet Mainnet.");
   if (accounts.length !== 1) throw new Error("Ready X must expose exactly one selected account.");
   const address = num.toHex(BigInt(accounts[0]!));
-  if (num.toHex(BigInt(account.address)) !== address) throw new Error("Ready X returned conflicting account identities.");
+  const confirmed = await walletRequest(walletV6.requestAccounts(wallet as never, true), "the selected-account check");
+  if (confirmed.length !== 1 || num.toHex(BigInt(confirmed[0]!)) !== address) throw new Error("Ready account changed during connection. Reconnect before continuing.");
+  const account = new WalletAccountV6({ provider, walletProvider: wallet as never, address });
   const unsubscribe = walletV6.subscribeWalletEvent(wallet as never, onChanged);
 
   async function assertFresh(): Promise<void> {
