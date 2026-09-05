@@ -28,7 +28,8 @@ import {
   readBalanceHealth,
   type BudgetCoordinator,
 } from "./executor.js";
-import { executePreparedExit, ExitExecutorError, readClaimCapacity, readFundingCheckpointPosition, validatePreparedExitPayload } from "./exit-executor.js";
+import { executePreparedExit, ExitExecutorError, isFirstUseSetupEnabled, readClaimCapacity, readFundingCheckpointPosition, validatePreparedExitPayload } from "./exit-executor.js";
+import { ROLE_BOUND_SETUP_POLICY } from "../../client/src/setup-authorization.mjs";
 
 export { RelayBudget } from "./budget.js";
 
@@ -76,7 +77,9 @@ export default {
         requireExitHeaders(request, env);
         await rateLimitExitIngress(env);
         const payload = await readUtf8BodyLimited(request, Number(parsePositiveDecimal(env.MAX_EXIT_PAYLOAD_BYTES, "exit_payload_limit", 2_097_152n)));
-        const validated = validatePreparedExitPayload(payload);
+        // Structural v2 decoding permits receipt reconciliation after a policy
+        // rollback; executePreparedExit gates fresh signing on the live flag.
+        const validated = validatePreparedExitPayload(payload, { allowSetup: true });
         const readiness = executorReadiness(env);
         if (!readiness.executable) throw new RelayHttpError(503, "executor_unavailable");
         const budget: BudgetCoordinator = env.RELAY_BUDGET.getByName(budgetObjectName(env));
@@ -289,6 +292,10 @@ async function health(request: Request, env: Env): Promise<Response> {
       executor: readiness,
       balance,
       claimCapacity,
+      setupSponsorship: {
+        enabled: ready && isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED),
+        policy: ROLE_BOUND_SETUP_POLICY,
+      },
       privacy: {
         payloadLogging: false,
         appKeysHeld: false,

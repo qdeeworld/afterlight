@@ -23,6 +23,9 @@ export type ValidatedExit = Readonly<{
     facts: Readonly<{ facts: readonly string[]; baseBlockNumber: bigint; messageHash: string }>;
   }>;
   bindingSha256: string;
+  hasSetup: boolean;
+  setupAuthorization: Readonly<{ messageHash: string; sigR: string; sigS: string }> | undefined;
+  setupStorageSlots: readonly bigint[];
 }>;
 
 export type ResourceBounds = Readonly<{
@@ -48,7 +51,8 @@ export function buildExitLocks(input: unknown): Readonly<{
   proofFactsSha256: string;
   bindingSha256: string;
 }>;
-export function validatePreparedExitPackage(input: unknown, policy: unknown): ValidatedExit;
+export function validatePreparedExitPackage(input: unknown, policy: unknown, options?: Readonly<{ allowSetup?: boolean }>): ValidatedExit;
+export function hashCanonical(value: unknown): string;
 export function proofFactsForFeeEstimate(raw: readonly string[]): readonly string[];
 export function parseResourceBounds(value: unknown): ResourceBounds;
 export function addResourceMargins(bounds: ResourceBounds, amountMarginBps: bigint, priceMarginBps: bigint): ResourceBounds;

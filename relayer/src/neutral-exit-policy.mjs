@@ -1,5 +1,10 @@
 import { createHash } from "node:crypto";
-import { constants, ec, hash } from "starknet";
+import { constants, ec, hash, shortString } from "starknet";
+import {
+  ROLE_BOUND_SETUP_POLICY,
+  SETUP_AUTHORIZATION_SCHEMA,
+  setupAuthorizationHash,
+} from "../../client/src/setup-authorization.mjs";
 
 export const MAINNET_CHAIN_ID = "0x534e5f4d41494e";
 export const LOCKED_NEUTRAL_ADDRESS =
@@ -56,6 +61,9 @@ const DECIMAL_RE = /^(?:0|[1-9][0-9]*)$/;
 const SHA256_RE = /^[0-9a-f]{64}$/;
 const STARK_FIELD_PRIME = 2n ** 251n + 17n * 2n ** 192n + 1n;
 const U64_MAX = 2n ** 64n - 1n;
+const POOL_SINGLETON_STORAGE = [
+  "auditor_public_key", "screener_public_key", "fee_amount", "fee_collector", "proof_validity_blocks",
+].map((name) => hash.starknetKeccak(name));
 const ACTION_POLICY = Object.freeze({
   CANCEL_REFUND: Object.freeze({
     discriminant: 1n,
@@ -88,12 +96,10 @@ export function canonicalJson(value) {
     }
     if (Array.isArray(item)) return item.map(visit);
     if (typeof item === "object") {
-      const out = {};
-      for (const key of Object.keys(item).sort()) {
+      return Object.fromEntries(Object.keys(item).sort().map((key) => {
         if (item[key] === undefined) throw new TypeError("undefined_not_canonical");
-        out[key] = visit(item[key]);
-      }
-      return out;
+        return [key, visit(item[key])];
+      }));
     }
     throw new TypeError("unsupported_canonical_json_value");
   };
@@ -368,9 +374,31 @@ export function validatePolicy(policy) {
   return Object.freeze({ policy, networkCapFri, amountMarginBps, priceMarginBps });
 }
 
-export function validatePreparedExitPackage(input, policy) {
+export function validatePreparedExitPackage(input, policy, options = {}) {
   validatePolicy(policy);
-  if (input?.schema !== "afterlight-prepared-neutral-exit/1") throw new Error("bad_exit_schema");
+  const hasSetup = input?.schema === "afterlight-prepared-neutral-exit/2";
+  if (!hasSetup && input?.schema !== "afterlight-prepared-neutral-exit/1") throw new Error("bad_exit_schema");
+  if (hasSetup && options.allowSetup !== true) throw new Error("first_use_setup_disabled");
+  if (!hasSetup && (input.setupPolicy !== undefined || input.setupAuthorization !== undefined)) {
+    throw new Error("setup_requires_versioned_exit");
+  }
+  let setupAuthorization;
+  if (hasSetup) {
+    if (input.setupPolicy !== ROLE_BOUND_SETUP_POLICY) throw new Error("wrong_setup_policy");
+    const auth = input.setupAuthorization;
+    if (
+      typeof auth !== "object" || auth === null || Array.isArray(auth) ||
+      Object.keys(auth).sort().join(",") !== "schema,sig_r,sig_s" ||
+      auth.schema !== SETUP_AUTHORIZATION_SCHEMA
+    ) throw new Error("invalid_setup_authorization");
+    const sigR = normalizeFelt(auth.sig_r, "setup_signature_r");
+    const sigS = normalizeFelt(auth.sig_s, "setup_signature_s");
+    if (BigInt(sigR) === 0n || BigInt(sigS) === 0n) throw new Error("zero_setup_signature");
+    const { locks: _locks, setupAuthorization: _auth, ...unsigned } = input;
+    setupAuthorization = Object.freeze({
+      messageHash: setupAuthorizationHash(hashCanonical(unsigned)), sigR, sigS,
+    });
+  }
   if (input.evidence !== "APPLICATION_AUTHORIZED_OUTER_UNSIGNED_NOT_SUBMITTED") {
     throw new Error("bad_exit_evidence_class");
   }
@@ -414,7 +442,7 @@ export function validatePreparedExitPackage(input, policy) {
   if (call.contractAddress !== normalizeHex(LOCKED_POOL_ADDRESS)) throw new Error("wrong_pool_call");
   if (call.entrypoint !== "apply_actions") throw new Error("wrong_pool_entrypoint");
   const parsed = parseServerActions(call.calldata);
-  const exactVariants = [0n, 7n, 10n];
+  const exactVariants = hasSetup ? [0n, 0n, 0n, 7n, 10n] : [0n, 7n, 10n];
   if (
     parsed.actions.length !== exactVariants.length ||
     parsed.actions.some((item, index) => item.variant !== exactVariants[index])
@@ -422,7 +450,30 @@ export function validatePreparedExitPackage(input, policy) {
   const writes = parsed.actions.filter((item) => item.variant === 0n);
   const notes = parsed.actions.filter((item) => item.variant === 7n);
   const invokes = parsed.actions.filter((item) => item.variant === 10n);
-  if (writes.length !== 1 || notes.length !== 1 || invokes.length !== 1) throw new Error("exit_action_cardinality");
+  if (writes.length !== (hasSetup ? 3 : 1) || notes.length !== 1 || invokes.length !== 1) throw new Error("exit_action_cardinality");
+  const setupStorageSlots = [];
+  if (hasSetup) {
+    if (writes[0].fields.length !== 4 || writes[0].fields[1] !== 2n || writes[0].fields[2] === 0n) {
+      throw new Error("setup_requires_two_felts_nonzero_salt");
+    }
+    if (writes[1].fields.length !== 3 || writes[1].fields[1] !== 1n || writes[1].fields[2] !== 1n) {
+      throw new Error("setup_requires_boolean_true");
+    }
+    const occupied = new Set();
+    for (const [index, write] of writes.entries()) {
+      const base = write.fields[0];
+      // The protocol bounds StorageBaseAddress, then permits small field
+      // offsets; a two-felt write at ADDR_BOUND - 1 is valid.
+      if (base === 0n || base >= constants.ADDR_BOUND) throw new Error("setup_storage_out_of_range");
+      for (let offset = 0n; offset < write.fields[1]; offset += 1n) {
+        const slot = base + offset;
+        if (occupied.has(slot)) throw new Error("setup_storage_overlap");
+        if (index < 2 && POOL_SINGLETON_STORAGE.includes(slot)) throw new Error("setup_configuration_storage");
+        occupied.add(slot);
+        if (index < 2) setupStorageSlots.push(slot);
+      }
+    }
+  }
   const note = notes[0];
   if (
     normalizeHex(`0x${note.fields[3].toString(16)}`) !== normalizeHex(LOCKED_TOKEN_ADDRESS) ||
@@ -430,7 +481,7 @@ export function validatePreparedExitPackage(input, policy) {
   ) {
     throw new Error("open_note_token_or_id_mismatch");
   }
-  const write = writes[0];
+  const write = writes.at(-1);
   const noteId = BigInt(metadata.destinationNoteId);
   const expectedStorageAddress = BigInt(
     hash.computePedersenHash(hash.starknetKeccak("notes"), noteId),
@@ -482,6 +533,23 @@ export function validatePreparedExitPackage(input, policy) {
     }
   }
   const proofFacts = parseProofFacts(proof.proof_facts);
+  if (hasSetup && BigInt(proofFacts.facts[0]) !== BigInt(PROOF1_HEADER)) {
+    throw new Error("setup_requires_real_proof1");
+  }
+  if (hasSetup) {
+    // Program/config metadata (facts[2]/facts[6]) is authenticated by canonical
+    // gateway admission, not guessed from SDK/mock-estimator constants. These
+    // local checks bind the exact pool output but do not verify raw proof bytes.
+    const expectedMessageHash = ec.starkCurve.poseidonHashMany([
+      BigInt(LOCKED_POOL_ADDRESS), 0n, BigInt(proofOutput.length), ...proofOutput,
+    ]);
+    if (
+      BigInt(proofFacts.facts[1]) !== BigInt(shortString.encodeShortString("VIRTUAL_SNOS")) ||
+      BigInt(proofFacts.facts[3]) !== BigInt(shortString.encodeShortString("VIRTUAL_SNOS0")) ||
+      BigInt(proofFacts.facts[5]) === 0n ||
+      BigInt(proofFacts.messageHash) !== expectedMessageHash
+    ) throw new Error("setup_proof_facts_binding_mismatch");
+  }
   if (typeof input.locks !== "object" || input.locks === null) throw new Error("missing_locks");
   const actualLocks = buildExitLocks(input);
   for (const [name, actual] of Object.entries(actualLocks)) {
@@ -503,6 +571,9 @@ export function validatePreparedExitPackage(input, policy) {
       facts: proofFacts,
     }),
     bindingSha256: actualLocks.bindingSha256,
+    hasSetup,
+    setupAuthorization,
+    setupStorageSlots: Object.freeze(setupStorageSlots),
     locks: actualLocks,
   });
 }
@@ -618,6 +689,20 @@ export function validateLiveExitState(validated, vault, blockTimestamp) {
   const timestamp = integer(blockTimestamp, "block_timestamp");
   if (timestamp > BigInt(validated.metadata.validUntil)) throw new Error("application_authorization_expired");
   if (validated.action === "CLAIM" && timestamp < parsed.claimAfter) throw new Error("claim_too_early");
+  if (validated.hasSetup) {
+    const authorization = validated.setupAuthorization;
+    const publicKey = validated.action === "CLAIM" ? parsed.successorKey : parsed.ownerKey;
+    let valid = false;
+    try {
+      const signature = new ec.starkCurve.Signature(BigInt(authorization.sigR), BigInt(authorization.sigS));
+      const x = publicKey.toString(16).padStart(64, "0");
+      valid = ["02", "03"].some((prefix) => {
+        try { return ec.starkCurve.verify(signature, authorization.messageHash, `${prefix}${x}`); }
+        catch { return false; }
+      });
+    } catch { /* Invalid curve scalars must fail closed before sponsorship. */ }
+    if (!valid) throw new Error("setup_role_authorization_invalid");
+  }
   return parsed;
 }
 

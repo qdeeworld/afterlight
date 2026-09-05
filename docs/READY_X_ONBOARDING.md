@@ -27,6 +27,15 @@ then-current account, registration, protocol-fee, and gas route. Fees and
 account state must be freshly quoted in Ready X; this document deliberately
 does not present an old estimate as a funding instruction.
 
+Private activation is separate from shielding a token. An account can be
+registered and still have zero private STRK and an uninitialized STRK
+subchannel. Do not repeat activation or recommend a Shield deposit merely
+because Afterlight rejects a prepared-action shape. The versioned
+[first-use compatibility policy](FRESH_WALLET_COMPATIBILITY.md) aims to sponsor
+that token setup alongside recovery when the live sponsor advertises support.
+An authentic external zero-to-one private-balance claim remains the required
+end-to-end verification; local tests are not a substitute.
+
 The public app requires the Ready X desktop browser extension at `5.33.9` or a
 later compatible Ready `5.x` release and verifies the Wallet API capabilities
 it uses. Mobile Ready and Braavos do not expose the STRK20 browser API required

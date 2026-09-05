@@ -65,6 +65,10 @@ const NEUTRAL = EXIT_POLICY.neutralAddress;
 const FUNDING_CHECKPOINT_MAX_AGE_SECONDS = 300n;
 const VAULT_FUNDED_SELECTOR = `0x${hash.starknetKeccak("VaultFunded").toString(16)}`;
 
+export function isFirstUseSetupEnabled(value: string): boolean {
+  return value === "true";
+}
+
 export class ExitExecutorError extends Error {
   constructor(readonly code: "invalid_exit" | "exit_unavailable" | "exit_busy" | "exit_uncertain" | "exit_reverted") {
     super(code);
@@ -301,11 +305,11 @@ export function assertFundingCheckpointFresh(checkpointTimestamp: number, latest
   }
 }
 
-export function validatePreparedExitPayload(payload: string): ValidatedExit {
+export function validatePreparedExitPayload(payload: string, options: Readonly<{ allowSetup?: boolean }> = {}): ValidatedExit {
   let decoded: unknown;
   try { decoded = JSON.parse(payload); } catch { throw new ExitExecutorError("invalid_exit"); }
   try {
-    const validated = validatePreparedExitPackage(decoded, EXIT_POLICY);
+    const validated = validatePreparedExitPackage(decoded, EXIT_POLICY, options);
     if (validated.action !== "CLAIM" && validated.action !== "CANCEL_REFUND") throw new Error("unsupported_exit");
     return validated;
   } catch { throw new ExitExecutorError("invalid_exit"); }
@@ -319,7 +323,9 @@ export async function executePreparedExit(
   afterAuthenticated?: () => Promise<void>,
   delivery: "broadcast" | "return_signed" | "reconcile_only" = "broadcast",
 ): Promise<ExitResult> {
-  const validated = prevalidated ?? validatePreparedExitPayload(payload);
+  // Decode v2 for exact stored-package reconciliation even if rollout is
+  // disabled. The rollout gate below still precedes every fresh signature.
+  const validated = prevalidated ?? validatePreparedExitPayload(payload, { allowSetup: true });
 
   // The binding is already a domain-separated SHA-256 over the complete exit
   // package. Budget keys deliberately accept only canonical 64-hex digests.
@@ -359,7 +365,7 @@ export async function executePreparedExit(
         validateStoredSignedExit(signedTransaction, validated, prior.transactionHash);
         return reconcileSubmittedExit(provider, budget, validated, prior.transactionHash);
       }
-      if (env.SUBMIT_ENABLED !== "true") {
+      if (env.SUBMIT_ENABLED !== "true" || (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED))) {
         return { status: "duplicate", transactionHash: prior.transactionHash };
       }
       const takeover = await budget.takeoverPrepared(
@@ -386,6 +392,9 @@ export async function executePreparedExit(
       prior.preparedPayload === null &&
       prior.exactFingerprint === validated.bindingSha256
     ) {
+      if (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED)) {
+        throw new ExitExecutorError("exit_unavailable");
+      }
       const takeover = await budget.takeoverHashless(
         semanticKey,
         validated.bindingSha256,
@@ -404,6 +413,7 @@ export async function executePreparedExit(
   // strand a transaction already recorded as SUBMITTED. Receipt-only
   // reconciliation above is safe while submission is disabled.
   if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
+  if (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED)) throw new ExitExecutorError("exit_unavailable");
   try {
     if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new Error("wrong_chain");
   } catch { throw exitStage("chain"); }
@@ -420,6 +430,11 @@ export async function executePreparedExit(
   try {
     validateAuthorizationInclusionWindow(validated.metadata.validUntil, blockTimestamp, BigInt(Math.floor(Date.now() / 1_000)));
   } catch { throw exitStage("inclusion_window"); }
+  // Cryptographic proof/fact authentication is the canonical Starknet
+  // gateway's admission responsibility, not fee estimation's. The signed v3
+  // transaction binds the exact calldata, original facts, nonce and fee bounds.
+  // Raw proof bytes are not part of that transaction hash. A valid proof does
+  // not guarantee application success: later reverts can consume bounded gas.
   const proofFacts = validated.proof.facts.facts.map(hex);
   const call: Call = { contractAddress: validated.call.contractAddress, entrypoint: validated.call.entrypoint, calldata: validated.call.calldata.map(hex) };
   const estimateDetails = (facts: readonly string[]) => ({
@@ -444,6 +459,8 @@ export async function executePreparedExit(
       // though accepted STRK20 transactions carry Ready's real PROOF1 facts.
       // Normalize only the estimate copy. The signed and broadcast transaction
       // below remains bound to the untouched real proof facts.
+      // This fallback is only a fee/execution quote, never proof verification.
+      // Gateway proof authentication remains mandatory before admission.
       const estimateFacts = proofFactsForFeeEstimate(validated.proof.facts.facts).map(hex);
       estimate = await account.estimateInvokeFee(call, estimateDetails(estimateFacts));
     } catch (fallbackError) {
@@ -461,9 +478,9 @@ export async function executePreparedExit(
     if (adoptedMaxFeeFri !== null && networkCap > BigInt(adoptedMaxFeeFri)) throw new Error("adopted_network_cap");
   } catch { throw exitStage("fee_and_balance"); }
 
-  // A successful authenticated simulation proves the application signature,
-  // proof, exact note and live state before consuming the victim-specific
-  // vault/action quota. Invalid callers remain bounded only by global ingress.
+  // Simulation checks the application signature, exact note and live state
+  // before consuming the victim-specific vault/action quota. It is not an
+  // independent cryptographic verifier of the raw STARK proof bytes.
   await afterAuthenticated?.();
 
   const reservation = adoptedMaxFeeFri === null ? await budget.reserve({
@@ -716,7 +733,28 @@ async function readSnapshot(provider: RpcProvider, validated: ValidatedExit, blo
   validateAllowanceForAction(validated.action, allowance);
   validateLiveExitState(validated, parseVaultResult(vaultRaw), timestamp);
   assertProofFreshness(validated.proof.facts.baseBlockNumber, blockNumber, BigInt(validityRaw[0] ?? 0));
+  await assertSetupStorageFreshness(provider, validated, blockNumber);
   return { nonce: BigInt(nonce), balance: parseU256Result(balanceRaw, "balance") };
+}
+
+export async function assertSetupStorageFreshness(
+  provider: Pick<RpcProvider, "getBlockWithTxHashes" | "getStorageAt">,
+  validated: ValidatedExit,
+  blockNumber: bigint,
+): Promise<void> {
+  if (!validated.hasSetup) return;
+  // Unused storage is a freshness check only: it does not establish that the
+  // encrypted setup belongs to this token/recipient. Role authorization binds
+  // that explicitly accepted side effect to the complete final package.
+  const baseBlock = await provider.getBlockWithTxHashes(Number(validated.proof.facts.baseBlockNumber));
+  if (!("block_hash" in baseBlock) || typeof baseBlock.block_hash !== "string" || BigInt(baseBlock.block_hash) !== BigInt(validated.proof.facts.facts[5]!)) {
+    throw new Error("setup_proof_base_block_mismatch");
+  }
+  const values = await Promise.all(validated.setupStorageSlots.flatMap((slot) => [
+    provider.getStorageAt(POOL, hex(slot), Number(validated.proof.facts.baseBlockNumber)),
+    provider.getStorageAt(POOL, hex(slot), Number(blockNumber)),
+  ]));
+  if (values.some((value) => BigInt(value.value) !== 0n)) throw new Error("setup_storage_already_used");
 }
 
 function hex(value: string | bigint): string { return `0x${BigInt(value).toString(16)}`; }

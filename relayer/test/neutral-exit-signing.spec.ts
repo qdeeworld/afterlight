@@ -46,6 +46,13 @@ describe("neutral exact-exit signing boundary", () => {
       category: "rpc_other",
       definitiveReject: false,
     });
+    // RPC 0.10.3 INVALID_PROOF. Rejecting supplied raw bytes cannot revoke a
+    // previously exported signature over facts. Do not expand safe-release
+    // classification based on this response.
+    expect(classifyBroadcastFailure({ code: 69 })).toEqual({
+      category: "rpc_other",
+      definitiveReject: false,
+    });
   });
 
   it("accepts only the exact WriteOnce, open-note, Afterlight Invoke package and pinned pool class", () => {
@@ -355,7 +362,14 @@ describe("neutral exact-exit signing boundary", () => {
     })).toBe(true);
 
     const publicKey = ec.starkCurve.getStarkKey(TEST_SIGNER);
-    expect(assertOuterSignatureMatchesHash(signed, publicKey)).toMatch(/^0x[0-9a-f]+$/);
+    const signedHash = assertOuterSignatureMatchesHash(signed, publicKey);
+    expect(signedHash).toMatch(/^0x[0-9a-f]+$/);
+    expect(() => assertOuterSignatureMatchesHash({ ...signed, proof_facts: ["0xabc", "0x123"] }, publicKey))
+      .toThrow(/outer_signature_hash_mismatch/);
+    // SNIP-36 signs facts, not raw proof bytes. A byte substitution does not
+    // revoke the outer signature; canonical gateway admission authenticates
+    // the facts/proof, and an exported signature must remain reserved.
+    expect(assertOuterSignatureMatchesHash({ ...signed, proof: "BQ==" }, publicKey)).toBe(signedHash);
   });
 
   it("persists and revalidates the exact signed exit artifact required for safe rebroadcast", async () => {

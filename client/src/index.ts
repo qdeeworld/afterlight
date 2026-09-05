@@ -4,3 +4,4 @@ export * from "./exit-preflight.js";
 export * from "./keys.js";
 export * from "./messages.js";
 export * from "./relay.js";
+export * from "./setup-authorization.mjs";

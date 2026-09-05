@@ -1,4 +1,4 @@
-import { num } from "starknet";
+import { num, shortString } from "starknet";
 import {
   OPEN_NOTE_PLACEHOLDER,
   PREPARE_SIGNATURE,
@@ -9,11 +9,13 @@ import {
   buildFundActions,
   resolveSimulatedPreparedExitNoteId,
   inspectSimulatedExitWrites,
+  preparedExitNeedsSetupAuthorization,
   serializeControl,
   type ControlArgs,
 } from "../../client/src/actions.ts";
 import { LocalStarkKey, BACKUP_CONFIRMATION } from "../../client/src/keys.ts";
 import { authorizationHash, type Authorization } from "../../client/src/messages.ts";
+import { ROLE_BOUND_SETUP_POLICY, SETUP_AUTHORIZATION_SCHEMA, setupAuthorizationHash } from "../../client/src/setup-authorization.mjs";
 import { buildRelayRequest, encodeRelayRequest, RelayOperation } from "../../client/src/relay.ts";
 import {
   AMOUNT_FRI,
@@ -316,6 +318,10 @@ export async function prepareExitPackage(input: {
   roleKey: LocalStarkKey;
   action: "CANCEL_REFUND" | "CLAIM";
   diagnosticOnly?: boolean;
+  /** Exact capability advertised by the sponsor; missing/unknown is closed. */
+  setupPolicy?: typeof ROLE_BOUND_SETUP_POLICY;
+  /** Explicit, per-attempt consent. Never cached across wallets or vaults. */
+  approveSetup?: () => boolean | Promise<boolean>;
 }): Promise<Readonly<Record<string, unknown>>> {
   const { ready, invitation, vault, roleKey, action } = input;
   const cancel = action === "CANCEL_REFUND";
@@ -339,14 +345,22 @@ export async function prepareExitPackage(input: {
     const report = inspectSimulatedExitWrites(sentinelPrepared);
     throw new Error(`Preparation check complete. No claim signed or submitted. Ready X ${ready.version}. Share this report privately with support: ${JSON.stringify(report)}`);
   }
+  let needsSetup: boolean;
   let noteId: string;
   try {
-    noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs);
+    needsSetup = preparedExitNeedsSetupAuthorization(sentinelPrepared);
+    if (needsSetup && input.setupPolicy !== ROLE_BOUND_SETUP_POLICY) {
+      throw new Error("Ready requires a first-use private token setup, but sponsored setup is not enabled. No claim was signed or submitted. Do not add funds or repeat wallet activation.");
+    }
+    noteId = resolveSimulatedPreparedExitNoteId(sentinelPrepared, POOL, CONTRACT, kind, sentinelArgs, { allowSetup: needsSetup });
   } catch (error) {
     if (error instanceof Error && error.message.startsWith("prepared exit must contain exactly")) {
       throw new Error(`${error.message} Ready X version: ${ready.version}. Stage: simulated preparation.`);
     }
     throw error;
+  }
+  if (needsSetup && await input.approveSetup?.() !== true) {
+    throw new Error("Private token setup was not authorized. No claim was signed or submitted.");
   }
   const auth: Authorization = cancel
     ? { operation: "CANCEL_REFUND", base: { ...base(invitation.vaultId, invitation.ownerKey, expectedState, vault.epoch, expectedNonce, expiry), note_id: noteId } }
@@ -356,6 +370,9 @@ export async function prepareExitPackage(input: {
   const signedPrepared = await ready.prepare(actionBuilder(CONTRACT, ready.address, signedArgs), false);
   const facts = signedPrepared.proof.proof_facts;
   if (!Array.isArray(facts) || facts.length < 6) throw new Error("Ready returned incomplete proof facts.");
+  if (needsSetup && BigInt(facts[0]!) !== BigInt(shortString.encodeShortString("PROOF1"))) {
+    throw new Error("Sponsored first-use setup requires Ready's real PROOF1 envelope. No setup authorization or claim was submitted.");
+  }
   const proofBlockNumber = BigInt(facts[4]!);
   if (proofBlockNumber > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Proof block is not safely addressable.");
   const proofBlock = await provider.getBlockWithTxHashes(Number(proofBlockNumber));
@@ -370,10 +387,11 @@ export async function prepareExitPackage(input: {
     signedNoteId: noteId,
     signedArgs,
     signedPrepared,
+    allowSetup: needsSetup,
   });
   const preparedAtBlock = String(await provider.getBlockNumber());
   const body: Record<string, unknown> = {
-    schema: "afterlight-prepared-neutral-exit/1",
+    schema: needsSetup ? "afterlight-prepared-neutral-exit/2" : "afterlight-prepared-neutral-exit/1",
     evidence: "APPLICATION_AUTHORIZED_OUTER_UNSIGNED_NOT_SUBMITTED",
     action,
     chainId: CHAIN_ID,
@@ -391,6 +409,15 @@ export async function prepareExitPackage(input: {
     preparedAtBlock,
     prepared: bound.prepared,
   };
+  if (needsSetup) {
+    body.setupPolicy = ROLE_BOUND_SETUP_POLICY;
+    // Sign only after validation of the final proof package. Keeping consent
+    // outside the proved call avoids a circular proof/signature dependency.
+    body.setupAuthorization = Object.freeze({
+      schema: SETUP_AUTHORIZATION_SCHEMA,
+      ...roleKey.sign(setupAuthorizationHash(await sha256Canonical(body))),
+    });
+  }
   const prepared = bound.prepared as unknown as { call: unknown; proof: { data: string; output: unknown; proof_facts: unknown } };
   const locks = {
     callSha256: await sha256Canonical(prepared.call),

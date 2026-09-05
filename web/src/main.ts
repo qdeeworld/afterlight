@@ -162,7 +162,14 @@ async function refreshSponsorCapacity(): Promise<SponsorCapacity> {
   const capacity = await requestSponsorCapacity(`${RELAYER_URL}/health`);
   exitCapacity = capacity.exit;
   fundingCapacity = capacity.funding;
+  setupPolicy = capacity.setupPolicy;
   return capacity;
+}
+
+let setupPolicy: SponsorCapacity["setupPolicy"];
+
+function approvePrivateTokenSetup(): boolean {
+  return window.confirm("Ready included one private token setup with this recovery. The sponsor pays the claim fees; no Shield deposit is needed. Your local key will authorize the exact final package, still limited to the reserve's 1 STRK. The setup is encrypted, so Afterlight cannot verify whether it belongs to this STRK destination. Allow this bounded setup?");
 }
 
 const appRoot = document.querySelector<HTMLDivElement>("#app");
@@ -861,7 +868,7 @@ function bindEvents(): void {
     let exitPackage = retained?.exitPackage;
     if (exitPackage === undefined) {
       notice = "Ready X will prepare one exact private return note. The sponsor signs the bounded transaction, then this browser broadcasts it independently."; render();
-      exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CANCEL_REFUND" });
+      exitPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CANCEL_REFUND", setupPolicy, approveSetup: approvePrivateTokenSetup });
       retainPendingExit({ action: "CANCEL_REFUND", vaultId: parsed.invitation.vaultId, exitPackage, balanceBefore: balanceBefore.toString() });
     }
     notice = retained ? "Reconciling the exact pending private return. No new note or authorization is being created." : "Owner authorization and exact return note verified. Requesting the bounded sponsor signature…"; render();
@@ -905,7 +912,7 @@ function bindEvents(): void {
     let claimPackage = retained?.exitPackage;
     if (claimPackage === undefined) {
       notice = "Ready X will prepare the exact private destination twice. The sponsor signs the bounded transaction, then this browser broadcasts it independently."; render();
-      claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CLAIM" });
+      claimPackage = await prepareExitPackage({ ready, invitation: parsed.invitation, vault: snapshot, roleKey: applicationKey, action: "CLAIM", setupPolicy, approveSetup: approvePrivateTokenSetup });
       retainPendingExit({ action: "CLAIM", vaultId: parsed.invitation.vaultId, exitPackage: claimPackage, balanceBefore: balanceBefore.toString() });
     }
     notice = retained ? "Reconciling the exact pending private claim. No new note or authorization is being created." : "Exact destination and designated-key authorization verified. Requesting the bounded sponsor signature…"; render();

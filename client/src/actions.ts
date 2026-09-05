@@ -27,6 +27,13 @@ export const LOCKED_READY_SPONSOR_SELECTOR =
 const OPEN_NOTE_PACKED_VALUE = 1n << 128n;
 const VIRTUAL_SNOS = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS"));
 const VIRTUAL_SNOS0 = toBigInt(shortString.encodeShortString("VIRTUAL_SNOS0"));
+const POOL_SINGLETON_STORAGE = [
+  "auditor_public_key",
+  "screener_public_key",
+  "fee_amount",
+  "fee_collector",
+  "proof_validity_blocks",
+].map((name) => hash.starknetKeccak(name));
 
 /** The wallet API may expose its prepared call in wire or Starknet.js form. */
 export type PreparedPoolCall =
@@ -39,6 +46,15 @@ export type PreparedPoolCall =
 
 /** The official Starknet.js response from `strk20PrepareInvoke`. */
 export type PreparedCallAndProof = STRK20_CALL_AND_PROOF;
+
+export type PreparedExitValidationOptions = Readonly<{
+  /**
+   * Admit one bounded setup candidate alongside the exact exit. This does not
+   * establish its channel/token relationship or authorize relayer submission;
+   * the relayer must require role-key consent bound to the final prepared bytes.
+   */
+  allowSetup?: boolean;
+}>;
 
 export type FundArgs = Readonly<{
   vault_id: FeltInput;
@@ -234,8 +250,9 @@ export function resolvePreparedExitNoteId(
   contract: FeltInput,
   kind: PrivateAction.CancelRefund | PrivateAction.Claim,
   args: ExitArgs,
+  options: PreparedExitValidationOptions = {},
 ): string {
-  return validatePreparedExit(preparedCall, pool, contract, kind, args).noteId;
+  return validatePreparedExit(preparedCall, pool, contract, kind, args, "strict-none-suffix", options).noteId;
 }
 
 /** Resolve a simulate=true sentinel, whose empty proof may omit the screening suffix. */
@@ -245,6 +262,7 @@ export function resolveSimulatedPreparedExitNoteId(
   contract: FeltInput,
   kind: PrivateAction.CancelRefund | PrivateAction.Claim,
   args: ExitArgs,
+  options: PreparedExitValidationOptions = {},
 ): string {
   assertSimulatedPreparedProof(prepared);
   return validatePreparedExit(
@@ -254,7 +272,37 @@ export function resolveSimulatedPreparedExitNoteId(
     kind,
     args,
     "simulated-may-omit-screening-suffix",
+    options,
   ).noteId;
+}
+
+/**
+ * Classify an exact three-action exit or a bounded five-action setup candidate.
+ * This is not proof verification or setup authorization. Only an empty simulated
+ * proof may omit the screening suffix; final calls retain strict suffix parsing.
+ */
+export function preparedExitNeedsSetupAuthorization(prepared: PreparedCallAndProof): boolean {
+  const simulated = prepared.proof?.data === "";
+  if (simulated) assertSimulatedPreparedProof(prepared);
+  const normalized = normalizePreparedPoolCall(prepared.call);
+  if (normalized.pool !== CANONICAL_STRK20_POOL || normalized.entrypoint !== "apply_actions") {
+    throw new Error("prepared exit classification requires canonical pool apply_actions");
+  }
+  const parsed = parseServerInvokes(
+    normalized.calldata,
+    simulated ? "simulated-may-omit-screening-suffix" : "strict-none-suffix",
+  );
+  const { openNote, invoke, setupWrite } = validatePreparedExitActionShape(parsed, true);
+  if (
+    invoke.calldata.length !== 11 ||
+    (invoke.calldata[0] !== BigInt(PrivateAction.Claim) &&
+      invoke.calldata[0] !== BigInt(PrivateAction.CancelRefund)) ||
+    invoke.calldata[2] !== toBigInt(openNote.token) ||
+    invoke.calldata[7] !== toBigInt(openNote.noteId)
+  ) {
+    throw new Error("prepared exit classification requires the exact note/token exit layout");
+  }
+  return setupWrite !== undefined;
 }
 
 /** Local, simulation-only support report. Never contains keys, proof, or write values. */
@@ -290,6 +338,7 @@ function validatePreparedExit(
   args: ExitArgs,
   screeningPolicy: "strict-none-suffix" | "simulated-may-omit-screening-suffix" =
     "strict-none-suffix",
+  options: PreparedExitValidationOptions = {},
 ): ValidatedPreparedExit {
   if (args.note_id !== OPEN_NOTE_PLACEHOLDER) {
     throw new Error("prepared exit validation requires the open-note placeholder");
@@ -308,30 +357,10 @@ function validatePreparedExit(
   }
 
   const parsed = parseServerInvokes(normalized.calldata, screeningPolicy);
-  const exactVariants = [0n, 7n, 10n];
-  if (
-    parsed.actions.length !== exactVariants.length ||
-    parsed.actions.some((action, index) => action.variant !== exactVariants[index])
-  ) {
-    // Report discriminants only: never include calldata, note IDs, or proof material.
-    const variants = parsed.actions.slice(0, 24).map((action) => action.variant.toString()).join(", ");
-    throw new Error(
-      `prepared exit must contain exactly WriteOnce, EmitOpenNoteCreated, Invoke; received ${parsed.actions.length} action(s), types [${variants}${parsed.actions.length > 24 ? ", …" : ""}] (expected [0, 7, 10]). No claim was submitted.`,
-    );
-  }
-  if (parsed.writeOnceActions.length !== 1) {
-    throw new Error(`expected one prepared note WriteOnce, found ${parsed.writeOnceActions.length}`);
-  }
-  if (parsed.openNotes.length !== 1) {
-    throw new Error(`expected one prepared open note, found ${parsed.openNotes.length}`);
-  }
-  if (parsed.invokes.length !== 1) {
-    throw new Error(`expected one prepared pool Invoke action, found ${parsed.invokes.length}`);
-  }
-  if (parsed.actions.at(-1)?.variant !== 10n) {
-    throw new Error("prepared Afterlight Invoke must be the final ServerAction");
-  }
-  const invoke = parsed.invokes[0]!;
+  const { openNote, writeOnce, setupWrite, invoke } = validatePreparedExitActionShape(
+    parsed,
+    options.allowSetup === true,
+  );
   if (invoke.target !== address(contract, "Afterlight contract")) {
     throw new Error("prepared pool Invoke targets the wrong Afterlight contract");
   }
@@ -349,7 +378,6 @@ function validatePreparedExit(
       throw new Error(`prepared Afterlight exit differs at calldata[${index}]`);
     }
   }
-  const openNote = parsed.openNotes[0]!;
   if (openNote.actionIndex >= invoke.actionIndex) {
     throw new Error("prepared open note must precede the Afterlight Invoke");
   }
@@ -359,24 +387,14 @@ function validatePreparedExit(
   if (openNote.noteId !== felt(raw[7]!, "resolved note id")) {
     throw new Error("prepared open-note ID differs from the signed helper destination");
   }
-  const writeOnce = parsed.writeOnceActions[0]!;
   const noteId = toBigInt(openNote.noteId, "prepared open-note ID");
-  if (writeOnce.storageAddress !== notesStorageAddress(noteId)) {
-    throw new Error("prepared note WriteOnce targets the wrong storage address");
-  }
-  if (
-    writeOnce.value.length !== 2 ||
-    writeOnce.value[0] !== OPEN_NOTE_PACKED_VALUE ||
-    writeOnce.value[1] !== toBigInt(openNote.token, "prepared open-note token")
-  ) {
-    throw new Error("prepared note WriteOnce has the wrong open-note value");
-  }
   return {
     noteId: felt(noteId, "resolved note id"),
     normalized,
     invoke,
     openNote,
     writeOnce,
+    setupWrite,
     actions: parsed.actions,
     actionsEnd: parsed.actionsEnd,
   };
@@ -387,7 +405,7 @@ export type PreparedExitProofEnvelope = Readonly<{
   prepared: PreparedCallAndProof;
 }>;
 
-export type ValidatePreparedExitProofEnvelopeArgs = Readonly<{
+export type ValidatePreparedExitProofEnvelopeArgs = PreparedExitValidationOptions & Readonly<{
   pool: FeltInput;
   contract: FeltInput;
   proofBaseBlock: Readonly<{ number: FeltInput; hash: FeltInput }>;
@@ -404,7 +422,11 @@ export type ValidatePreparedExitProofEnvelopeArgs = Readonly<{
  * signed after the sentinel prepare. Both action sets retain
  * OPEN_NOTE_PLACEHOLDER; only the prepared calls contain the concrete note id.
  * Ready recompiles CreateOpenNote with fresh encryption randomness, so the two
- * calls are compared semantically. The caller must prevent any intervening
+ * calls are compared semantically. With `allowSetup`, only the candidate setup
+ * record's salt/ciphertext may also change; its targets and existence boolean
+ * remain fixed. This opt-in does not prove a same-token setup relationship or
+ * replace the relayer's separate consent over the exact final prepared bytes.
+ * The caller must prevent any intervening
  * wallet action that could advance the recipient channel's token note index and
  * therefore change the note id. `proofBaseBlock` must come from
  * an independent mainnet RPC lookup of the block identified by the proof facts;
@@ -439,6 +461,7 @@ export function validatePreparedExitProofEnvelope(
     input.kind,
     input.sentinelArgs,
     "simulated-may-omit-screening-suffix",
+    input,
   );
   if (sentinelExit.noteId !== signedNoteId) {
     throw new Error("sentinel prepared note does not match the signed note");
@@ -450,6 +473,8 @@ export function validatePreparedExitProofEnvelope(
     input.contract,
     input.kind,
     input.signedArgs,
+    "strict-none-suffix",
+    input,
   );
   if (signedExit.noteId !== signedNoteId) {
     throw new Error("final prepared note drifted from the signed note");
@@ -476,6 +501,7 @@ export type DappSubmittedPreparedExit = PreparedExitProofEnvelope &
       contract: FeltInput;
       kind: PrivateAction.CancelRefund | PrivateAction.Claim;
       args: ExitArgs;
+      allowSetup: boolean;
     }>;
   }>;
 
@@ -499,6 +525,7 @@ export function bindDappSubmittedPreparedExit(
       contract: input.contract,
       kind: input.kind,
       args: input.signedArgs,
+      allowSetup: input.allowSetup === true,
     }),
   });
 }
@@ -518,6 +545,7 @@ export function assertExactDappSubmittedPreparedExit(
     binding.contract,
     binding.kind,
     binding.args,
+    binding,
   );
   if (noteId !== submission.noteId) {
     throw new Error("prepared exit changed after note binding");
@@ -669,6 +697,7 @@ type ParsedOpenNote = Readonly<{
 type ParsedWriteOnce = Readonly<{
   storageAddress: bigint;
   value: readonly bigint[];
+  valueStart: number;
   actionIndex: number;
 }>;
 
@@ -692,9 +721,83 @@ type ValidatedPreparedExit = Readonly<{
   invoke: ParsedInvoke;
   openNote: ParsedOpenNote;
   writeOnce: ParsedWriteOnce;
+  setupWrite: ParsedWriteOnce | undefined;
   actions: readonly ParsedServerAction[];
   actionsEnd: number;
 }>;
+
+function validatePreparedExitActionShape(
+  parsed: ParsedServerInvokes,
+  allowSetup: boolean,
+): Readonly<{
+  openNote: ParsedOpenNote;
+  writeOnce: ParsedWriteOnce;
+  setupWrite: ParsedWriteOnce | undefined;
+  invoke: ParsedInvoke;
+}> {
+  const hasSetup = allowSetup && parsed.actions.length === 5;
+  const exactVariants = hasSetup ? [0n, 0n, 0n, 7n, 10n] : [0n, 7n, 10n];
+  if (
+    parsed.actions.length !== exactVariants.length ||
+    parsed.actions.some((action, index) => action.variant !== exactVariants[index])
+  ) {
+    // Report discriminants only: never include calldata, note IDs, or proof material.
+    const variants = parsed.actions.slice(0, 24).map((action) => action.variant.toString()).join(", ");
+    const policy = allowSetup ? "[0, 7, 10] or setup candidate [0, 0, 0, 7, 10]" : "[0, 7, 10]";
+    throw new Error(
+      `prepared exit must contain exactly WriteOnce, EmitOpenNoteCreated, Invoke${allowSetup ? " with only the opted-in setup prefix" : ""}; received ${parsed.actions.length} action(s), types [${variants}${parsed.actions.length > 24 ? ", …" : ""}] (expected ${policy}). No claim was submitted.`,
+    );
+  }
+  if (
+    parsed.writeOnceActions.length !== (hasSetup ? 3 : 1) ||
+    parsed.openNotes.length !== 1 ||
+    parsed.invokes.length !== 1
+  ) {
+    throw new Error("prepared exit must contain one exact note WriteOnce, open note and final Invoke");
+  }
+  const writeOnce = parsed.writeOnceActions.at(-1)!;
+  const openNote = parsed.openNotes[0]!;
+  if (writeOnce.storageAddress !== notesStorageAddress(toBigInt(openNote.noteId))) {
+    throw new Error("prepared open-note WriteOnce targets the wrong storage address");
+  }
+  if (
+    writeOnce.value.length !== 2 ||
+    writeOnce.value[0] !== OPEN_NOTE_PACKED_VALUE ||
+    writeOnce.value[1] !== toBigInt(openNote.token, "prepared open-note token")
+  ) {
+    throw new Error("prepared open-note WriteOnce has the wrong open-note value");
+  }
+
+  const setupWrite = hasSetup ? parsed.writeOnceActions[0]! : undefined;
+  if (setupWrite !== undefined) {
+    const existenceWrite = parsed.writeOnceActions[1]!;
+    if (setupWrite.value.length !== 2 || setupWrite.value[0] === 0n) {
+      throw new Error("prepared setup WriteOnce requires two felts and a nonzero salt");
+    }
+    if (existenceWrite.value.length !== 1 || existenceWrite.value[0] !== 1n) {
+      throw new Error("prepared setup existence WriteOnce requires the single boolean true");
+    }
+    const occupied = new Set<bigint>();
+    for (const write of parsed.writeOnceActions) {
+      if (write.storageAddress === 0n || write.storageAddress >= constants.ADDR_BOUND) {
+        throw new Error("prepared setup/note WriteOnce storage base is outside the nonzero storage range");
+      }
+      for (let offset = 0; offset < write.value.length; offset += 1) {
+        const slot = write.storageAddress + BigInt(offset);
+        if (occupied.has(slot)) {
+          throw new Error("prepared setup/note WriteOnce storage ranges overlap");
+        }
+        // These public singleton slots can be identified without private channel
+        // material. Hashed map namespaces cannot be inferred from these targets.
+        if (write !== writeOnce && POOL_SINGLETON_STORAGE.includes(slot)) {
+          throw new Error("prepared setup WriteOnce overlaps known pool configuration storage");
+        }
+        occupied.add(slot);
+      }
+    }
+  }
+  return { openNote, writeOnce, setupWrite, invoke: parsed.invokes[0]! };
+}
 
 function normalizePreparedPoolCall(call: PreparedPoolCall): NormalizedPreparedPoolCall {
   const record = call as unknown as Record<string, unknown>;
@@ -789,6 +892,12 @@ function assertEquivalentPreparedExitCalls(
     throw new Error("sentinel and final prepared open-note layouts differ");
   }
   for (const offset of randomizedOpenNoteOffsets) signatureOffsets.add(offset);
+  if (sentinel.setupWrite !== undefined && signed.setupWrite !== undefined) {
+    // Only the first setup write's salt and encrypted token are randomized.
+    // Targets, lengths, the existence boolean and every other action stay fixed.
+    signatureOffsets.add(sentinel.setupWrite.valueStart);
+    signatureOffsets.add(sentinel.setupWrite.valueStart + 1);
+  }
   for (let index = 0; index < sentinelRaw.length; index += 1) {
     if (!signatureOffsets.has(index) && sentinelRaw[index] !== signedRaw[index]) {
       throw new Error(`sentinel and final prepared pool calls differ at calldata[${index}]`);
@@ -1153,6 +1262,7 @@ function parseServerInvokes(
         writeOnceActions.push({
           storageAddress,
           value: raw.slice(cursor, end),
+          valueStart: cursor,
           actionIndex,
         });
         cursor = end;

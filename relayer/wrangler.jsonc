@@ -14,6 +14,9 @@
     "MAX_RELAY_TTL_SECONDS": "900",
     "MAX_RELAY_PAYLOAD_BYTES": "2048",
     "MAX_EXIT_PAYLOAD_BYTES": "2097152",
+    // Explicit rollout gate. Canonical gateway admission authenticates proof
+    // facts; fee estimation alone does not verify raw STARK proof bytes.
+    "FIRST_USE_SETUP_ENABLED": "true",
     "MAX_OUTSTANDING_VAULTS": "3",
     "DAILY_EXIT_BUDGET_FRI": "22500000000000000000",
     "FUNDING_ADMISSION_TTL_MS": "600000",

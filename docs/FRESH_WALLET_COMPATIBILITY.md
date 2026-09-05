@@ -1,6 +1,9 @@
 # Fresh successor wallet investigation
 
-Status: blocked before submission; no external completion claimed.
+Status: the bounded compatibility policy is implemented and reviewed. Runtime
+availability is advertised by `GET /health` under `setupSponsorship`; an
+external fresh-wallet recovery receipt is still unverified. Automated tests do
+not establish external completion.
 
 ## Authorization preflight
 
@@ -27,7 +30,9 @@ establish five-action compatibility or a completed recovery.
 
 Ready X 5.33.9 returned `[0, 0, 0, 7, 10]` during simulated preparation
 for a newly activated external successor. The released client and relayer
-accept only `[0, 7, 10]`. Both restrictions remain in place.
+accepted only `[0, 7, 10]` in the original release. That remains the generic
+client/default validator policy. The versioned opt-in policy below handles
+the five-action path only when the sponsor explicitly advertises support.
 
 The pinned STRK20 reference, commit
 `66e3caae8c0201227a6719696d004e30d90aea65`, defines:
@@ -75,7 +80,67 @@ The Cairo tests also confirm that an unrelated token subchannel can be opened
 alongside the intended note while preserving the five-action shape. The test
 helpers use synthetic funds and cheat proof facts; they are not authentic-proof
 verification. Both client and relayer retain rejection coverage for this shape.
-No compatibility fix or external claim completion is claimed.
+Those reproduction tests alone establish neither live compatibility nor
+external claim completion.
+
+## Versioned role-bound setup policy
+
+The candidate policy `afterlight-role-bound-setup/1` accepts exactly one
+protocol-valid token subchannel setup alongside the exact private exit. This
+deliberately does **not** assert that the encrypted setup belongs to the note's
+token or recipient. One unrelated valid token setup is within the amended
+sponsor policy; additional transfers, invocations, or setup pairs are not.
+
+The browser and relayer require the precise five-action layout, a two-felt setup
+record with nonzero salt, a single `true` marker, valid nonzero storage bases,
+and disjoint occupied slots. Known public configuration slots are excluded.
+These are structural checks, not proof of hashed storage namespace membership.
+The note write, token, amount, helper call, role, state, epoch, nonce and deadline
+remain exact. Simulated/final setup targets and the boolean cannot change;
+setup encryption randomness may change before final authorization.
+
+For this path only, the browser asks for per-attempt consent and creates an
+`afterlight-prepared-neutral-exit/2` package. An additional local application-key
+signature binds canonical SHA-256 of the entire final package, excluding only
+the signature envelope itself and the derived locks. The signature domain pins
+Mainnet, the sponsor, pool/class, Afterlight/class and STRK. Both digest halves
+are retained. The relayer verifies against the designated key from the live
+vault, not a key supplied by the requester. This signature authorizes exact
+bytes; it does not authenticate their privacy proof.
+
+Proof authentication uses Starknet's canonical Mainnet admission/consensus
+boundary, as in the existing three-action route. The reviewed gateway verifies
+the proof (or reuses already authenticated facts) before admission; protocol
+prevalidation also checks the allowed program, version, base block and chain
+configuration. Afterlight independently binds those facts to the exact actions
+and pinned pool class. `starknet_estimateFee` is only execution simulation and a
+fee quote, not proof verification. A PROOF0 estimate copy is never signed or
+submitted in place of the untouched final PROOF1 facts.
+
+The sponsor's V3 signature binds calldata, proof facts, chain, nonce and resource
+bounds, not raw proof bytes. Replacing raw bytes cannot authorize different
+effects: admission requires evidence of the same signed facts or a matching
+trusted proof-cache entry. A separate local verifier cannot prevent post-signing
+byte replacement or delayed submission. Admitted application failures can still
+consume bounded gas; an exported signature remains reserved until canonical
+resolution. A single node's rejection is not signature revocation. This is not
+a promise that every malformed replacement is rejected (cached authenticated
+facts are a relevant exception).
+
+Primary references at sequencer revision
+`16facd2c92f2bea99532717cbb2057ca0463d679`:
+[gateway admission](https://github.com/starkware-libs/sequencer/blob/16facd2c92f2bea99532717cbb2057ca0463d679/crates/apollo_gateway/src/gateway.rs),
+[transaction hash](https://github.com/starkware-libs/sequencer/blob/16facd2c92f2bea99532717cbb2057ca0463d679/crates/starknet_api/src/transaction_hash.rs),
+[proof cache](https://github.com/starkware-libs/sequencer/blob/16facd2c92f2bea99532717cbb2057ca0463d679/crates/apollo_transaction_converter/src/transaction_converter.rs).
+These document the reviewed implementation; they are not an independent
+attestation of a particular node operator's live configuration. No independent
+native proof-verifier service is required by this release. Rollout remains
+explicitly gated, and already-signed exact packages can still be reconciled.
+
+No sponsor fee caps, daily budgets, allowance limits, or reserve amount are
+increased. No private balance minimum or separate Shield deposit is introduced.
+Ready's one-time private registration is still a prerequisite; registration
+and first use of a token subchannel are different protocol steps.
 
 ## Required before claiming compatibility
 

@@ -3,10 +3,12 @@ export type SponsorCapacityState = "ready" | "exhausted" | "unknown";
 export type SponsorCapacity = Readonly<{
   exit: SponsorCapacityState;
   funding: SponsorCapacityState;
+  setupPolicy?: typeof ROLE_BOUND_SETUP_POLICY;
 }>;
 
 type HealthBody = Readonly<{
   submission?: string;
+  setupSponsorship?: Readonly<{ enabled?: unknown; policy?: unknown }>;
   claimCapacity?: Readonly<{
     status?: string;
     fundingStatus?: string;
@@ -54,6 +56,8 @@ export async function requestSponsorCapacity(
       lastCapacity = {
         exit: normalize(body.claimCapacity.status),
         funding: normalize(body.claimCapacity.fundingStatus),
+        ...(body.setupSponsorship?.enabled === true && body.setupSponsorship.policy === ROLE_BOUND_SETUP_POLICY
+          ? { setupPolicy: ROLE_BOUND_SETUP_POLICY } : {}),
       };
       if (lastCapacity.exit !== "unknown" && lastCapacity.funding !== "unknown") return lastCapacity;
     } catch (error) {
@@ -64,3 +68,4 @@ export async function requestSponsorCapacity(
   if (lastCapacity !== undefined) return lastCapacity;
   throw lastError instanceof Error ? lastError : new Error("sponsor_health_unavailable");
 }
+import { ROLE_BOUND_SETUP_POLICY } from "../../client/src/setup-authorization.mjs";

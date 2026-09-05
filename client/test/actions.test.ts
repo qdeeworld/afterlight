@@ -21,6 +21,7 @@ import {
   OPEN_NOTE_PLACEHOLDER,
   PINNED_STRK20_POOL_CLASS_HASH,
   PREPARE_SIGNATURE,
+  preparedExitNeedsSetupAuthorization,
   PrivateAction,
   resolvePreparedExitNoteId,
   resolveSimulatedPreparedExitNoteId,
@@ -30,6 +31,7 @@ import {
   type ExitArgs,
   type FundArgs,
   type PreparedCallAndProof,
+  type ValidatePreparedExitProofEnvelopeArgs,
 } from "../src/index.js";
 
 const contract = "0x1234";
@@ -387,6 +389,39 @@ function preparedExit(
   };
 }
 
+// Synthetic setup targets and ciphertext only. Their shape does not identify a
+// token/channel, and these fixtures do not establish authentic proof validity.
+const syntheticSetupActions = [
+  ["0x0", "0x111", "0x2", "0xabcdef", "0xfedcba"],
+  ["0x0", "0x222", "0x1", "0x1"],
+] as const;
+
+function setupExitEnvelope(
+  signedOptions: Parameters<typeof preparedExit>[3] = {},
+  sentinelOptions: Parameters<typeof preparedExit>[3] = {},
+): ValidatePreparedExitProofEnvelopeArgs {
+  const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
+  return {
+    allowSetup: true,
+    pool,
+    contract,
+    proofBaseBlock,
+    kind: PrivateAction.Claim,
+    sentinelArgs,
+    sentinelPrepared: preparedExit(PrivateAction.Claim, sentinelArgs, "0xdeadbeef", {
+      simulate: true,
+      setupActions: syntheticSetupActions,
+      ...sentinelOptions,
+    }),
+    signedNoteId: "0xdeadbeef",
+    signedArgs: exit,
+    signedPrepared: preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", {
+      setupActions: syntheticSetupActions,
+      ...signedOptions,
+    }),
+  };
+}
+
 test("resolved OPEN note is extracted from sentinel and real-signature prepared pool calls", () => {
   const sentinelArgs: ExitArgs = { ...exit, ...PREPARE_SIGNATURE };
   const sentinelSerialized = serializeExit(PrivateAction.Claim, sentinelArgs);
@@ -546,6 +581,266 @@ test("five-action setup prefixes remain rejected for simulated and final claims 
     // editing a real proof-bound response, restores the established boundary.
     const ordinary = preparedExit(kind, args, "0xdeadbeef");
     assert.equal(resolvePreparedExitNoteId(ordinary.call, pool, contract, kind, args), "0xdeadbeef");
+  }
+});
+
+test("bounded setup candidates require opt-in and preserve the exact signed response", () => {
+  for (const kind of [PrivateAction.Claim, PrivateAction.CancelRefund] as const) {
+    const signedArgs = { ...exit, expected_state: kind === PrivateAction.Claim ? 2n : 1n };
+    const sentinelArgs: ExitArgs = { ...signedArgs, ...PREPARE_SIGNATURE };
+    for (const screeningSuffix of [[], ["0x1"]]) {
+      const sentinelPrepared = preparedExit(kind, sentinelArgs, "0xdeadbeef", {
+        simulate: true,
+        screeningSuffix,
+        setupActions: syntheticSetupActions,
+      });
+      const signedPrepared = preparedExit(kind, signedArgs, "0xdeadbeef", {
+        setupActions: syntheticSetupActions,
+      });
+      const originalCall = [...signedPrepared.call.calldata as string[]];
+      assert.equal(preparedExitNeedsSetupAuthorization(sentinelPrepared), true);
+      assert.equal(preparedExitNeedsSetupAuthorization(signedPrepared), true);
+      assert.throws(
+        () => resolveSimulatedPreparedExitNoteId(sentinelPrepared, pool, contract, kind, sentinelArgs),
+        /must contain exactly/,
+      );
+      assert.equal(
+        resolveSimulatedPreparedExitNoteId(sentinelPrepared, pool, contract, kind, sentinelArgs, { allowSetup: true }),
+        "0xdeadbeef",
+      );
+      const input = {
+        pool, contract, proofBaseBlock, kind, sentinelArgs, sentinelPrepared,
+        signedNoteId: "0xdeadbeef", signedArgs, signedPrepared,
+      };
+      assert.throws(() => validatePreparedExitProofEnvelope(input), /must contain exactly/);
+      assert.throws(
+        () => validatePreparedExitProofEnvelope({ ...input, allowSetup: false }),
+        /must contain exactly/,
+      );
+      const submission = bindDappSubmittedPreparedExit({ ...input, allowSetup: true });
+      assert.equal(submission.noteId, "0xdeadbeef");
+      assert.equal(submission.prepared, signedPrepared);
+      assert.equal(assertExactDappSubmittedPreparedExit(submission, signedPrepared), signedPrepared);
+      assert.deepEqual(signedPrepared.call.calldata, originalCall);
+      assert.equal(Object.isFrozen(signedPrepared.call.calldata), true);
+      assert.equal(Object.isFrozen(signedPrepared.proof.output), true);
+      assert.throws(
+        () => assertExactDappSubmittedPreparedExit(submission, structuredClone(signedPrepared)),
+        /rebuilt response/,
+      );
+    }
+  }
+  for (const simulate of [true, false]) {
+    assert.equal(
+      preparedExitNeedsSetupAuthorization(preparedExit(PrivateAction.Claim, exit, "0xdeadbeef", { simulate })),
+      false,
+    );
+  }
+  assert.doesNotThrow(() => validatePreparedExitProofEnvelope(setupExitEnvelope({ setupActions: [] }, { setupActions: [] })));
+});
+
+test("setup salt and ciphertext may change while setup targets and exact exit stay fixed", () => {
+  const input = setupExitEnvelope({
+    setupActions: [
+      ["0x0", "0x111", "0x2", hex(1n << 200n), "0x0"],
+      ["0x0", "0x222", "0x1", "0x1"],
+    ],
+    ephemeralPublicKey: "0x3333",
+    encryptedRecipient: "0x4444",
+  });
+  assert.equal(validatePreparedExitProofEnvelope(input).prepared, input.signedPrepared);
+
+  for (const setupActions of [
+    [["0x0", "0x112", "0x2", "0xa", "0xb"], syntheticSetupActions[1]],
+    [syntheticSetupActions[0], ["0x0", "0x223", "0x1", "0x1"]],
+  ]) {
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(setupExitEnvelope({ setupActions })),
+      /differ at calldata/,
+    );
+  }
+  for (const [signedOptions, sentinelOptions] of [
+    [{ setupActions: [] }, {}],
+    [{}, { setupActions: [] }],
+  ] as const) {
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(setupExitEnvelope(signedOptions, sentinelOptions)),
+      /layouts differ/,
+    );
+  }
+});
+
+test("opt-in rejects malformed setup widths, salts, booleans and out-of-range felts", () => {
+  const invalidSetupActions = [
+    [["0x0", "0x111", "0x0"], syntheticSetupActions[1]],
+    [["0x0", "0x111", "0x1", "0xa"], syntheticSetupActions[1]],
+    [["0x0", "0x111", "0x3", "0xa", "0xb", "0xc"], syntheticSetupActions[1]],
+    [["0x0", "0x111", "0x2", "0x0", "0xb"], syntheticSetupActions[1]],
+    [syntheticSetupActions[0], ["0x0", "0x222", "0x0"]],
+    [syntheticSetupActions[0], ["0x0", "0x222", "0x2", "0x1", "0x1"]],
+    [syntheticSetupActions[0], ["0x0", "0x222", "0x1", "0x0"]],
+    [syntheticSetupActions[0], ["0x0", "0x222", "0x1", "0x2"]],
+    [["0x0", "0x111", "0x2", hex(constants.PRIME), "0xb"], syntheticSetupActions[1]],
+    [["0x0", "0x111", "0x2", "0xa", hex(constants.PRIME)], syntheticSetupActions[1]],
+    [["0x0", "0x111", "0x2", "-1", "0xb"], syntheticSetupActions[1]],
+  ];
+  for (const setupActions of invalidSetupActions) {
+    const input = setupExitEnvelope({ setupActions });
+    assert.throws(() => validatePreparedExitProofEnvelope(input), /setup|Stark field|non-negative/);
+    assert.throws(() => preparedExitNeedsSetupAuthorization(input.signedPrepared), /setup|Stark field|non-negative/);
+  }
+});
+
+test("opt-in enforces nonzero storage bases and disjoint occupied setup/note slots", () => {
+  const noteBase = BigInt(noteStorageAddress("0xdeadbeef"));
+  const invalidTargets = [
+    [0n, 0x222n],
+    [0x111n, 0n],
+    [constants.ADDR_BOUND, 0x222n],
+    [0x111n, constants.ADDR_BOUND],
+    [constants.PRIME, 0x222n],
+    [0x111n, constants.PRIME],
+    [0x111n, 0x111n],
+    [0x111n, 0x112n],
+    [noteBase, 0x222n],
+    [noteBase - 1n, 0x222n],
+    [noteBase + 1n, 0x222n],
+    [0x111n, noteBase],
+    [0x111n, noteBase + 1n],
+  ] as const;
+  for (const [firstBase, secondBase] of invalidTargets) {
+    const setupActions = [
+      ["0x0", hex(firstBase), "0x2", "0xa", "0xb"],
+      ["0x0", hex(secondBase), "0x1", "0x1"],
+    ];
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(setupExitEnvelope({ setupActions }, { setupActions })),
+      /storage|overlap|Stark field/,
+    );
+  }
+  // Cairo restricts the base to ADDR_BOUND; the small offset may extend past it.
+  const lastValidBase = [
+    ["0x0", hex(constants.ADDR_BOUND - 1n), "0x2", "0xa", "0xb"],
+    syntheticSetupActions[1],
+  ];
+  assert.doesNotThrow(() => validatePreparedExitProofEnvelope(setupExitEnvelope(
+    { setupActions: lastValidBase }, { setupActions: lastValidBase },
+  )));
+
+  for (const name of ["auditor_public_key", "screener_public_key", "fee_amount", "fee_collector", "proof_validity_blocks"]) {
+    const slot = hash.starknetKeccak(name);
+    for (const [firstBase, secondBase] of [[slot - 1n, 0x222n], [0x111n, slot]]) {
+      const setupActions = [
+        ["0x0", hex(firstBase!), "0x2", "0xa", "0xb"],
+        ["0x0", hex(secondBase!), "0x1", "0x1"],
+      ];
+      assert.throws(
+        () => validatePreparedExitProofEnvelope(setupExitEnvelope({ setupActions }, { setupActions })),
+        /known pool configuration storage/,
+      );
+    }
+  }
+});
+
+test("opt-in rejects extra actions, action reordering and every non-exit action type", () => {
+  const rejectedOptions: NonNullable<Parameters<typeof preparedExit>[3]>[] = [
+    { setupActions: [syntheticSetupActions[0]] },
+    { setupActions: [...syntheticSetupActions, syntheticSetupActions[1]] },
+    { setupActions: [...syntheticSetupActions, ...syntheticSetupActions] },
+    { setupActions: [syntheticSetupActions[1], syntheticSetupActions[0]] },
+    { setupActions: [], serverActionsBefore: syntheticSetupActions },
+    { copies: 2 },
+    { serverActionsBefore: [["0x3", address(account), address(token), "0x1"]] },
+    { serverActionsBefore: [["0x0", "0x333", "0x1", "0x1"]] },
+  ];
+  for (const options of rejectedOptions) {
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(setupExitEnvelope(options)),
+      /must contain exactly|setup/,
+    );
+  }
+  for (const replacement of [
+    ["0x1", "0x111", "0x222", "0x333", "0x444"],
+    ["0x2", "0x111", token, "0x1"],
+    ["0x3", "0x111", token, "0x1"],
+    ["0x4", "0x111", "0x222", "0x333", "0x444", "0x555"],
+    ["0x5", "0x111", "0x222", "0x333", account, token, "0x1"],
+    ["0x6", "0x111", token, "0x1"],
+    ["0x7", "0x111", "0x222", "0x333", token, "0x444"],
+    ["0x8", "0x111", "0x222"],
+    ["0x9", "0x111"],
+    ["0xa", contract, "0x0"],
+    ["0xb", contract, "0x0"],
+    ["0xc"],
+  ]) {
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(setupExitEnvelope({
+        setupActions: [replacement, syntheticSetupActions[1]],
+      })),
+      /must contain exactly|unknown prepared pool ServerAction/,
+    );
+  }
+});
+
+test("opt-in keeps destination, token, amount, invoke, screening and proof checks", () => {
+  for (const options of [
+    { pool: "0x7777" },
+    { target: "0x7777" },
+    { entrypoint: "compile_actions" },
+    { openNoteId: "0xcafebabe" },
+    { openNoteToken: "0x7777" },
+    { writeOnceStorage: "0x7777" },
+    { writeOncePackedValue: "0x0" },
+    { writeOnceToken: "0x7777" },
+    { auditorPublicKey: "0xbad" },
+    { screeningSuffix: [] },
+    { screeningSuffix: ["0x0"] },
+    { screeningSuffix: ["0x1", "0x1"] },
+    { poolClassHash: "0x123" },
+    { proofFacts: ["0x2"] },
+  ]) {
+    assert.throws(() => validatePreparedExitProofEnvelope(setupExitEnvelope(options)));
+  }
+
+  for (let index = 0; index < 11; index += 1) {
+    const input = setupExitEnvelope();
+    const calldata = input.signedPrepared.call.calldata as string[];
+    const invokeStart = calldata.length - 1 - 11;
+    calldata[invokeStart + index] = hex(BigInt(calldata[invokeStart + index]!) + 1n);
+    assert.throws(
+      () => validatePreparedExitProofEnvelope(input),
+      /differs at calldata|destination/,
+    );
+  }
+
+  for (const mutate of [
+    (prepared: PreparedCallAndProof) => { prepared.proof.data = "not-base64"; },
+    (prepared: PreparedCallAndProof) => { prepared.proof.data = ""; },
+    (prepared: PreparedCallAndProof) => { prepared.proof.output[5] = "0x123"; },
+    (prepared: PreparedCallAndProof) => { prepared.proof.proof_facts[8] = "0x123"; },
+    (prepared: PreparedCallAndProof) => { prepared.proof.proof_facts[4] = "0x1"; },
+    (prepared: PreparedCallAndProof) => { prepared.proof.proof_facts[5] = "0x1"; },
+    // Setup randomness may differ across prepares, but final output must bind it.
+    (prepared: PreparedCallAndProof) => { (prepared.call.calldata as string[])[5] = "0x123"; },
+  ]) {
+    const input = setupExitEnvelope();
+    mutate(input.signedPrepared);
+    assert.throws(() => validatePreparedExitProofEnvelope(input), /proof|base64/);
+  }
+});
+
+test("setup classification rejects malformed simulation proofs and final suffixes", () => {
+  const unexpectedSentinelProof = setupExitEnvelope().sentinelPrepared;
+  unexpectedSentinelProof.proof.output = ["0x1"];
+  assert.throws(() => preparedExitNeedsSetupAuthorization(unexpectedSentinelProof), /empty simulate=true proof/);
+  for (const options of [
+    { screeningSuffix: [] },
+    { screeningSuffix: ["0x0"] },
+    { pool: "0x7777" },
+    { entrypoint: "compile_actions" },
+    { openNoteId: "0xcafebabe" },
+  ]) {
+    assert.throws(() => preparedExitNeedsSetupAuthorization(setupExitEnvelope(options).signedPrepared));
   }
 });
 
