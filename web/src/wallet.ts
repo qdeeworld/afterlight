@@ -4,7 +4,7 @@ import type { STRK20_ACTION } from "@starknet-io/types-js";
 import type { PreparedCallAndProof } from "../../client/src/actions.ts";
 import { CHAIN_ID, READY_MIN_VERSION } from "./config.ts";
 import { isCompatibleReadyVersion, isRecognizedReadyName, isUsableReadyProvider } from "./compatibility.ts";
-import { walletRequest } from "./wallet-request.ts";
+import { walletAuthorizationResult, walletRequest } from "./wallet-request.ts";
 
 type ReadyWallet = ReturnType<ReturnType<typeof createStore>["getWallets"]>[number];
 
@@ -81,11 +81,15 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
   const unsubscribe = walletV6.subscribeWalletEvent(wallet as never, onChanged);
 
   async function assertFresh(): Promise<void> {
-    const [freshAccounts, freshChain] = await Promise.all([
-      walletV6.requestAccounts(wallet as never, true),
-      walletV6.requestChainId(wallet as never),
-    ]);
-    if (freshAccounts.length !== 1 || num.toHex(BigInt(freshAccounts[0]!)) !== address || num.toHex(BigInt(freshChain)) !== CHAIN_ID) {
+    // Chain-ID requests require site authorization in Ready X. Never race them
+    // with account authorization. Session methods are user-triggered, never
+    // background polling. An authorized session returns without another prompt.
+    const freshAccounts = await walletRequest(walletV6.requestAccounts(wallet as never, false), "wallet authorization");
+    if (freshAccounts.length !== 1 || num.toHex(BigInt(freshAccounts[0]!)) !== address) {
+      throw new Error("Ready account or network changed. Reconnect before continuing.");
+    }
+    const freshChain = await walletRequest(walletV6.requestChainId(wallet as never), "the network check");
+    if (num.toHex(BigInt(freshChain)) !== CHAIN_ID) {
       throw new Error("Ready account or network changed. Reconnect before continuing.");
     }
   }
@@ -97,7 +101,7 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
     chainId,
     balance: async (token) => {
       await assertFresh();
-      const raw = await account.strk20Balances([token] as never) as unknown;
+      const raw = await walletRequest(account.strk20Balances([token] as never), "the private-balance check") as unknown;
       if (!Array.isArray(raw)) throw new Error("Ready returned an invalid private-balance response.");
       const match = raw.find((entry) => {
         if (!entry || typeof entry !== "object") return false;
@@ -123,7 +127,8 @@ export async function connectReady(provider: RpcProvider, onChanged: () => void)
     },
     prepare: async (actions, simulate) => {
       await assertFresh();
-      return account.strk20PrepareInvoke([...actions] as never, simulate);
+      // Preparation is never automatically retried or replaced by an invoke.
+      return walletAuthorizationResult(account.strk20PrepareInvoke([...actions] as never, simulate), simulate ? "simulated preparation" : "final preparation");
     },
     disconnect: unsubscribe,
   };

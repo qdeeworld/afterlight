@@ -2,6 +2,29 @@
 
 Status: blocked before submission; no external completion claimed.
 
+## Authorization preflight
+
+An external diagnostic subsequently stopped with `Not preauthorized`. In the
+official public Argent X source at commit
+`e3545daa417d6b60332b6112816d5e3b13c34358`,
+`packages/extension/src/inpage/requestMessageHandlers/requestChainIdHandler.ts`
+throws that exact error when `getIsPreauthorized()` is falsy. The helper in
+`packages/extension/src/inpage/messaging.ts` also returns a falsy value after an
+authorization-response timeout. It does not establish a gas or balance problem.
+That public source does not include the installed 5.33.9 STRK20 handlers, so it
+does not prove which request failed in the external browser.
+
+Afterlight now labels account, network, balance, simulated preparation and final
+preparation permission failures separately. User-triggered preparation requests
+interactive account authorization first, checks the same selected account, then
+checks Mainnet in sequence. It never automatically replays preparation or
+submits a transaction to recover a permission error. A recognized permission
+failure clears the in-memory wallet connection without clearing the loaded key,
+invitation, or pending transaction data. A successful reconnection does not
+establish five-action compatibility or a completed recovery.
+
+## Prepared-action compatibility
+
 Ready X 5.33.9 returned `[0, 0, 0, 7, 10]` during simulated preparation
 for a newly activated external successor. The released client and relayer
 accept only `[0, 7, 10]`. Both restrictions remain in place.

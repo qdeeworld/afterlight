@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { walletRequest } from "../src/wallet-request.ts";
+import { ReadyAuthorizationError, walletAuthorizationResult, walletRequest } from "../src/wallet-request.ts";
 
 describe("connection request deadline", () => {
+  it("identifies the failed permission stage without replaying the request", async () => {
+    const request = Promise.reject(new Error("Not preauthorized"));
+    await expect(walletRequest(request, "the network check")).rejects.toThrow("permission during the network check");
+    await expect(walletAuthorizationResult(Promise.reject({ message: "Not preauthorized" }), "simulated preparation")).rejects.toBeInstanceOf(ReadyAuthorizationError);
+    await expect(walletAuthorizationResult(Promise.reject(new Error("Proof failed")), "final preparation")).rejects.toThrow("Proof failed");
+  });
   it("returns successful responses and preserves wallet rejection", async () => {
     await expect(walletRequest(Promise.resolve(["0x123"]), "connection")).resolves.toEqual(["0x123"]);
     await expect(walletRequest(Promise.reject(new Error("User rejected")), "connection")).rejects.toThrow("User rejected");

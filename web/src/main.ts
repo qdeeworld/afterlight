@@ -1,5 +1,6 @@
 import "./style.css";
 import { roleNavigationUrl } from "./navigation.ts";
+import { ReadyAuthorizationError } from "./wallet-request.ts";
 import { num } from "starknet";
 import { RELAYER_URL, STRK } from "./config.ts";
 import { assertMainnet, readLiability, readTransactionOutcome, readVault } from "./chain.ts";
@@ -502,6 +503,12 @@ function render(): void {
 }
 
 function fail(error: unknown): void {
+  if (error instanceof ReadyAuthorizationError) {
+    ready?.disconnect();
+    ready = undefined;
+    privateBalance = undefined;
+    walletStatus = "available";
+  }
   notice = error instanceof Error ? error.message : String(error);
   if (notice.startsWith("prepared exit must contain exactly")) {
     const parsed = parseInvitation(invitationText);
