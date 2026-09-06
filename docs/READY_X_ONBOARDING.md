@@ -2,16 +2,12 @@
 
 ## Evidence and release status
 
-This is the Ready X flow implemented by the public Afterlight interface and
-exercised by the deployed Mainnet mechanism. The contract and a complete
-founder-operated E3 lifecycle through the public interface exist. An assisted
-external owner-successor claim also succeeded on Mainnet on September 5, 2026;
-its `CLAIMED` state and zero remaining liability were independently verified.
-The user subsequently confirmed `1 STRK` visible in the successor's private
-account; that balance was not independently read by the building agent.
-Unassisted cold-user E4 completion is not claimed. Nothing here is a standing
-instruction to fund or sign; users must review the live wallet request and
-current fees.
+This is the Ready X flow implemented by the public Afterlight app. Two external
+users—an owner and a successor—completed recovery on September 5, 2026, with
+verified `CLAIMED` state, zero remaining liability and successor-confirmed
+receipt of `1 STRK` privately. The separate public Recovery Drill and its five
+published transactions are recorded in [Mainnet evidence](MAINNET.md).
+Before funding or signing, review the live wallet request and current fees.
 
 ## Accounts and STRK20 prerequisites
 
@@ -41,7 +37,7 @@ subchannel. Do not repeat activation or recommend a Shield deposit merely
 because Afterlight rejects a prepared-action shape. The versioned
 [first-use compatibility policy](FRESH_WALLET_COMPATIBILITY.md) sponsors
 that token setup alongside recovery when the live sponsor advertises support.
-The assisted external claim confirms an onchain exit for the reported
+The completed external recovery confirms an onchain exit for the reported
 activated/zero-balance case, followed by the user's report of `1 STRK` visible
 privately. Always confirm the private-wallet balance separately; local tests
 and a proof-preparation approval are not a receipt or a balance confirmation.

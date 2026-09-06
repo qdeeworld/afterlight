@@ -1,6 +1,6 @@
 # Neutral relayer operations
 
-This runbook applies to the E2-passed production relayer and its inert staging profile.
+This runbook applies to the live Mainnet production relayer and its inert staging profile.
 
 ## Hosting boundary
 
@@ -57,13 +57,38 @@ Install `RELAYER_ACCOUNT_PRIVATE_KEY` and `STARKNET_RPC_AUTH_TOKEN` only with `w
 
 ## Monitoring and alerts
 
-The public repository's `Inert relayer staging health` workflow checks the
-provider-only inert staging endpoint every 30 minutes while submission is disabled.
-It verifies the fail-closed executor state, privacy response, and security
-headers. Replace that staging check with production health and alerting during
-promotion; a green inert check is never production readiness evidence.
+The public repository's [Production judged-path health workflow](../.github/workflows/relayer-health.yml)
+checks the production `/health` endpoint and the public app. It requires enabled
+submission, a ready executor and signer adapter, healthy balance, ready claim
+and funding capacity, the no-payload-logging privacy flags, and the expected
+security headers. It also verifies that the app serves its expected title.
+A green inert staging check is never production readiness evidence.
 
-Monitor through at least 2026-09-04:
+The workflow requests runs at minutes 7 and 37 of each hour and supports manual
+dispatch. GitHub scheduling is best effort: delayed or dropped runs are possible,
+so this is not a guaranteed 30-minute alerting service. Check the timestamp of
+the most recent successful run, not just its green badge. The maintainer owns
+capacity response and replenishment; a workflow failure does not automatically
+refill the account or restore allowance. A green health response verifies
+operational admission, not a new wallet recovery.
+
+Retain monitoring through the September 11, 2026 announced results and any
+extended judging period. The workflow has no programmed stop date. During an
+active review session, use a separate read-only check if the scheduled run is
+delayed:
+
+```sh
+curl --fail --silent --show-error --connect-timeout 10 --max-time 20 \
+  --header 'Origin: https://afterlight.dolepee.com' \
+  https://afterlight-relayer-phase-a.qdworld001.workers.dev/health
+```
+
+For the first-use recovery path, also check `setupSponsorship.enabled` is `true`
+and its policy is `afterlight-role-bound-setup/1`. The existing workflow does
+not assert those two fields. Do not promise the optional setup path when its
+policy is absent; do not infer availability from a prior successful claim.
+
+Monitor:
 
 - `/health` availability and collapsed balance status;
 - `/health.claimCapacity`; stop supported-UI funding whenever `fundingStatus` is not `ready`. The browser checks this state and the checkpoint route freshly rechecks it immediately before atomically acquiring the deployment-wide ten-minute funding lease. Allowance must be positive, no more than `60 STRK`, and an exact multiple of the `6 STRK` pool fee. The service admits at most three outstanding `1 STRK` vaults, and only when current allowance, relayer balance, the `1 STRK` retained floor, and the `22.5 STRK` daily network-fee budget conservatively back every outstanding exit plus the proposed vault. One outstanding vault therefore consumes one backed slot instead of globally closing funding. Sponsorship must remain unfrozen, neither control nor exit may have an active shared-nonce reservation, and no funding lease may be active. The release pins the contract's `300`-second checkpoint age. An abandoned lease rolls back only after ten minutes, when the checkpoint is already stale. The lease serializes the supported checkpoint route but cannot authorize the permissionless contract checkpoint. Monitor unexpected checkpoint and funding events, every allowance decrement, every exit-budget reservation, and the remaining fully backed vault slots.
@@ -87,6 +112,52 @@ Control and exit spend use separate UTC-day totals because their policy ceilings
 are intentionally different. They still share the same reservation table and
 single active nonce lane; splitting accounting does not permit concurrent
 broadcasts from the neutral account.
+
+## Capacity response and replenishment
+
+`claimCapacity.status: ready` does not mean three slots are funded. A completed
+claim or cancellation consumes one `6 STRK` allowance increment and its actual
+fees. New admission pauses when the remaining backing is insufficient.
+
+1. Read current health, pool fee, pool allowance, sponsor balance and contract
+   liability. Check active reservations, the funding lease and UTC-day spending
+   through the authorized operator environment without publishing their records.
+2. If a transaction is pending or its outcome is ambiguous, reconcile that exact
+   hash and nonce first. A top-up does not clear a reservation, a sponsorship
+   freeze or a consumed daily budget. Never reset the ledger to force readiness.
+3. If allowance or balance is the limiting resource, calculate the minimum for
+   the intended number of backed exits. With the current policy, each exit
+   requires `6 STRK` of pool allowance plus a `7.5 STRK` maximum network-fee
+   reservation; retain the shared `1 STRK` balance floor. One, two and three
+   slots therefore require at least `14.5`, `28` and `41.5 STRK` of balance and
+   `6`, `12` and `18 STRK` of allowance respectively, before other active
+   reservations or control-call spending. These are backing thresholds, not fee
+   quotes or spending instructions. Apply the daily budget and liability checks
+   as well.
+4. Within explicit funding and transaction authority, replenish the existing
+   sponsor account. Before submitting an allowance change from that account,
+   set `SUBMIT_ENABLED=false`, deploy the configuration-only maintenance change
+   and verify that the live endpoint reports submission disabled. Keep read-only
+   state and receipt checks available. Wait for in-flight requests to finish and
+   reconcile every active `RESERVED`/`SUBMITTED` operation, retained signed
+   artifact and funding lease. Confirm the shared nonce lane is drained and
+   public RPC account nonces agree before signing the approval. Never clear a
+   reservation or discard a signed artifact merely to make maintenance proceed.
+   An allowance approval outside the ledger must not race a control or exit
+   using the same account nonce; a snapshot while submission remains enabled is
+   insufficient. Then restore only the required pool allowance in exact
+   `6 STRK` increments. Never approve unlimited allowance or exceed the
+   `60 STRK` allowance ceiling, funded balance, daily budget or per-call caps.
+   Do not use an owner/successor wallet to fund the neutral account in a way that
+   contradicts the documented privacy boundary. No contract redeployment is needed.
+5. After successful receipts, re-read allowance, balance, liability and health.
+   Reconcile the approval's nonce and fee, then restore submission only when no
+   operation remains ambiguous and all configuration, backing and ledger checks
+   pass. Verify ready production health after re-enabling submission; a planned
+   maintenance pause is not a reason to weaken the health predicate.
+   Keep the UI's admission guards intact until current checks pass. Preserve
+   backed capacity for real use; do not consume it on a repeat demo merely to
+   check readiness.
 
 Do not log request bodies, signatures, IP addresses, wallet addresses,
 application keys, vault IDs, transaction fingerprints, RPC authorization, or

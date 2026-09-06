@@ -129,9 +129,8 @@ recovery of tokens sent directly to the helper.
 
 The deployed Mainnet release is `0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25`. Two spike vaults completed the cancellation and recovery branches, and a fresh public Recovery Drill completed the owner and successor journey through the canonical app. All five qualifying STRK20 receipts are listed in `strk20.json`. The E3 claim moved the public vault to `CLAIMED`, reduced liability and allowance to zero, consumed the successor nonce, and increased the successor's Ready X shielded balance from `7 STRK` to `8 STRK`.
 
-An assisted external owner-successor claim succeeded on September 5, 2026, with
-independently verified `CLAIMED` state and zero remaining liability. The user
-subsequently confirmed `1 STRK` visible in the successor's private account;
-that balance was not independently read by the building agent. This does not
-establish unassisted cold-user E4 completion. The five public receipts and
-approved demo remain unchanged, without external participant identifiers.
+Two external users—an owner and a successor—completed recovery on September 5,
+2026, with verified `CLAIMED` state and zero remaining liability. The successor
+confirmed receiving `1 STRK` privately. The five public drill receipts and
+approved demo remain separate from that event, without external participant
+identifiers.

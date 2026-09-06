@@ -2,13 +2,12 @@
 
 Status: the bounded compatibility policy is implemented and reviewed. Runtime
 availability is advertised by `GET /health` under `setupSponsorship`. On September
-5, 2026, an assisted external owner-successor claim was independently confirmed
+5, 2026, an external owner-successor recovery was confirmed
 SUCCEEDED on Mainnet, with `CLAIMED` vault state and zero remaining liability.
 The external successor reported prior private activation and zero private STRK
 without a Shield deposit; the user subsequently confirmed `1 STRK` visible in
-the successor's private account. That private balance is user-reported, not an
-independent read by the building agent. Unassisted cold-user E4 completion and
-compatibility with every fresh-wallet variant are not claimed.
+the successor's private account. The private balance is user-confirmed.
+This validates the reported case, not compatibility with every wallet variant.
 
 ## Authorization preflight
 
@@ -155,10 +154,16 @@ and first use of a token subchannel are different protocol steps.
 The released browser and relayer enforce the same bounded setup rule, with
 regression coverage for simulated/final pairs, setup randomness, changed
 targets, overlapping slots, exact-exit checks and final role authorization.
-The September 5 assisted external completion is separate live evidence; the
-private balance confirmation remains the user's report. Neither the synthetic
-tests nor that one completion establish unassisted onboarding, every wallet
-variant, or a same-token relationship for encrypted setup.
+The September 5 external recovery is separate live evidence; its private balance
+is user-confirmed. Neither the synthetic tests nor that completion establish
+compatibility with every wallet variant or a same-token relationship for
+encrypted setup.
+
+During that test, the users encountered the preparation and first-use setup
+issues documented above. Product fixes shipped before the users completed
+recovery themselves. This record verifies successful settlement for the
+reported case; it is not an evaluation of onboarding without product-team
+support.
 
 The owner still pays the reserve principal and Ready's quoted funding and
 wallet-setup costs. Sponsored exit/setup support is conditional on the live
