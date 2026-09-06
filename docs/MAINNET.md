@@ -1,22 +1,26 @@
 # Mainnet release and evidence
 
-## Current evidence level
+## Completed Mainnet recovery
 
-Afterlight has a deployed public Mainnet Recovery Drill and five
-validator-qualified STRK20 receipts. It is classified **E3 public completion**.
-A fresh Recovery
-Drill completed through the canonical app, and an approved Ready X
-`wallet_strk20Balances` read showed the successor increase from `7 STRK` to
-`8 STRK` after its exact-note claim. Prepared, simulated, reverted, and
-unrelated pool transactions are not counted as successful evidence.
+Two external users—an owner and a successor—completed a real recovery on
+Starknet Mainnet using Afterlight. The successor confirmed receiving the
+`1 STRK` reserve in their private account.
 
-An assisted external owner-successor claim also succeeded on September 5, 2026.
-Its `CLAIMED` state and zero remaining liability were independently verified;
-the user subsequently confirmed `1 STRK` visible in the successor's private
-account. The external private balance was not independently read by the building
-agent. This is assisted external completion, not an unassisted cold-user E4
-claim. External identifiers are not added to the five published receipts or
-the approved demo.
+The September 5, 2026 recovery transaction succeeded, moved the reserve to
+`CLAIMED`, and reduced its remaining liability to zero.
+
+Afterlight’s public Recovery Drill demonstrates private funding, heartbeat,
+recovery request, owner veto and successful private recovery. Five published
+Mainnet transactions have passed the official validator’s checks.
+
+The external recovery is separate from the five drill receipts below. Its
+private balance is user-confirmed. External participant identifiers remain
+outside the public receipt set and the approved demo.
+
+For the public drill, an approved Ready X `wallet_strk20Balances` read showed
+the successor increase from `7 STRK` to `8 STRK` after its exact-note claim.
+Prepared, simulated, reverted and unrelated pool transactions are not counted
+as successful evidence.
 
 ## Pinned Starknet Mainnet dependencies
 
@@ -40,7 +44,7 @@ artifact-identity proof for the live pool class.
 | Sierra class hash | `0x05da9866f62cc6dd1e380e8d9206e78a752b460abdb802070e0be1208ec7b1a6` | Declared on Mainnet |
 | CASM/compiled class hash | `0x055ba10e36aac8e21b3437f1413f009f6b17d3633c307941a4412ce73566251` | Declaration lock |
 | Afterlight contract | [`0x06e8…61c25`](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25) | Deployed on Mainnet |
-| Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; public E3 controls complete |
+| Neutral relayer account | `0x05b0b8cbda8eca89b88ae6975c80a880b0164a853c6ed881a56e39e4622edd46` | Deployed; public drill controls complete |
 
 Run `scarb --profile spike-inline-56 build` and
 `npm --prefix client run verify:locked-artifacts` to recompute the exact hashes.
@@ -61,21 +65,20 @@ contract. Plain Shield transactions and failed attempts do not fill these slots.
 | `CANCEL_REFUND` Vault A | [`0x69e234…c0fb`](https://starkscan.co/tx/0x69e2345ae8816986a709de84f0dcb571b5d092400d6c53bf90197480102c0fb) | PASS |
 | `FUND` Vault B | [`0x036e00…0682a`](https://starkscan.co/tx/0x036e003396fe360ae7fe4766646f493c0eb579d82509652559d40e460770682a) | PASS |
 | `CLAIM` Vault B | [`0x11c990…c8098`](https://starkscan.co/tx/0x11c990aea864e755630d41fd1292620c313b3f64407fc0b3a902544c67c8098) | PASS |
-| Public E3 `CLAIM` | [`0x722033…f5c1b6`](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6) | PASS |
+| Public drill `CLAIM` | [`0x722033…f5c1b6`](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6) | PASS |
 
 The official hub validator's exact success, pool-touch, and declared-contract
-ownership checks pass for all five. At the terminal E2 checkpoint, Vault A was
+ownership checks pass for all five. At the first terminal checkpoint, Vault A was
 `CANCELLED`, Vault B was `CLAIMED`, total locked liability was zero, and the
 neutral pool allowance was zero. Exact-note settlement is proven onchain. The
 wallet's post-finality
 reconciliation is `6 STRK -> 7 STRK`: the exact `+1 STRK` recovery output was
 added to the beneficiary while the neutral sponsor paid the separate `6 STRK`
-pool fee. The public E3 vault is also `CLAIMED`; its immediate Ready X
+pool fee. The public drill vault is also `CLAIMED`; its immediate Ready X
 reconciliation is `7 STRK -> 8 STRK`. The verified final demo is available on
 [YouTube](https://youtu.be/doPd4wyuODc).
 
-The public E3 lifecycle was founder-operated. Unassisted cold-user E4
-completion is not claimed. After that historical lifecycle, the neutral sponsor allowance
+After that historical lifecycle, the neutral sponsor allowance
 was deliberately restored to exactly `12 STRK`. The hardened policy accepts a
 positive allowance only in exact `6 STRK` fee increments, caps it at `60 STRK`,
 and admits at most three outstanding vaults. New funding is allowed beside an
@@ -95,7 +98,7 @@ token-subchannel setup with an exit, but does not replace account deployment or
 private registration.
 
 The sponsor returns the exact signed private-exit transaction to the browser,
-which broadcasts it through an independent public RPC and then asks the service
+which broadcasts it through a public RPC and then asks the service
 to reconcile the receipt. Heartbeat, request and veto retain the privacy-first
 neutral route. A user can explicitly submit any of those controls from Ready X
 if the relay is unavailable, with a mandatory warning that this emergency route

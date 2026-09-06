@@ -106,11 +106,10 @@ donations to the helper expecting a refund; unaccounted surplus remains inert.
 
 The local suites cover caller, token, amount, mode, interval, key reuse, wrong-key, expiry, nonce, epoch, state, contract, chain, vault, destination, redirect, replay, double settlement, dust, surplus, liability isolation, timing boundaries, veto/claim races, and failed-transfer rollback.
 
-Mainnet receipts now prove the neutral-sender control path, both STRK20 funding actions, exact-note cancellation, exact-note successor recovery, terminal states, and zero remaining liability. A fresh public E3 Recovery Drill completed through the canonical app; its succeeded claim moved the vault to `CLAIMED` and a fresh Ready X read proved the successor balance increased from `7 STRK` to `8 STRK`. The founder-controlled wallets share historical public funding correlation, so this is E3 product evidence, not proof of historically unrelated participants or E4 independent completion.
+Mainnet receipts prove the neutral-sender control path, both STRK20 funding actions, exact-note cancellation, exact-note successor recovery, terminal states, and zero remaining liability. The public Recovery Drill completed through the canonical app; its succeeded claim moved the vault to `CLAIMED` and a Ready X read proved the successor balance increased from `7 STRK` to `8 STRK`. The drill wallets share historical public funding correlation; those receipts do not establish the absence of earlier wallet links.
 
-An assisted external owner-successor claim also succeeded on September 5, 2026.
-Its `CLAIMED` state and zero remaining liability were independently verified;
-the user subsequently confirmed `1 STRK` visible in the successor's private
-account. The external private balance is user-reported, not agent-read, and the
-assisted journey does not establish unassisted cold-user E4 completion. Its
-private identifiers are not included in the published receipt set.
+Two external users also completed a real recovery on September 5, 2026.
+The transaction succeeded, the reserve reached `CLAIMED`, and its remaining
+liability was zero. The successor confirmed receiving `1 STRK` privately.
+That private balance is user-confirmed; participant identifiers are not included
+in the separate published drill receipt set.

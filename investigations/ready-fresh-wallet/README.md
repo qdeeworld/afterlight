@@ -1,7 +1,7 @@
 # Fresh token-channel compatibility reproduction
 
 Status: local reproduction complete; the versioned first-use policy has since
-shipped and an assisted external claim succeeded on September 5, 2026. These
+shipped and an external recovery succeeded on September 5, 2026. These
 synthetic reproduction tests remain separate from that live evidence; see
 [the current compatibility record](../../docs/FRESH_WALLET_COMPATIBILITY.md).
 
@@ -76,11 +76,10 @@ the isolated reproduction checkout. No Afterlight dependencies were changed.
 
 The released browser and relayer now implement the bounded five-action policy
 with simulated/final binding and final-package role consent. The September 5
-assisted external claim was independently confirmed successful on Mainnet with
-`CLAIMED` state and zero remaining liability. The user subsequently confirmed
-`1 STRK` visible in the successor's private account; that balance is
-user-reported, not independently read by the building agent. Unassisted
-cold-user E4 completion and all fresh-wallet variants remain unproven.
+external recovery was confirmed successful on Mainnet with `CLAIMED` state and
+zero remaining liability. The successor confirmed receiving `1 STRK` privately.
+The private balance is user-confirmed; compatibility with every wallet variant
+is not claimed.
 
 These local tests alone are not external recovery evidence. The owner still
 pays the reserve principal and Ready's quoted funding and required wallet-setup

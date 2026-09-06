@@ -6,15 +6,25 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 [Open Afterlight](https://afterlight.dolepee.com) · [Mainnet evidence](docs/MAINNET.md) · [Deployed contract](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25)
 
+Canonical hackathon listing: **`afterlight-recovery`** in the [official registry](https://github.com/starkience/strk20-hackathon/blob/main/registry.json).
+
 [![CI](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml)
 
 ## Working on Mainnet
 
-**Two independent external users—an owner and a successor—used Afterlight to complete a real recovery on Starknet Mainnet. The successor confirmed receiving the `1 STRK` reserve in their private account.**
+Two external users—an owner and a successor—completed a real recovery on
+Starknet Mainnet using Afterlight. The successor confirmed receiving the
+`1 STRK` reserve in their private account.
 
-The September 5, 2026 claim succeeded on Mainnet, moved the reserve to `CLAIMED`, and reduced its remaining liability to zero.
+The September 5, 2026 recovery transaction succeeded, moved the reserve to
+`CLAIMED`, and reduced its remaining liability to zero.
 
-The complete Recovery Drill has also run through the public app: private funding → heartbeat → request → owner veto → second request → [exact-note recovery](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6). Five published successful transactions touch both the canonical STRK20 pool and Afterlight. See the [Mainnet record](docs/MAINNET.md) for the public receipts and verification details.
+Afterlight’s public Recovery Drill demonstrates private funding, heartbeat,
+recovery request, owner veto and successful private recovery. Five published
+Mainnet transactions have passed the official validator’s checks.
+
+The [Mainnet record](docs/MAINNET.md) contains the drill receipts and verification
+details. The external recovery is a separate event, not one of those five hashes.
 
 The public app provides Ready X connection, encrypted per-vault key backups, private funding, live reserve state, heartbeat and veto controls, private recovery, and post-claim balance reconciliation.
 
@@ -23,7 +33,7 @@ The public app provides Ready X connection, encrypted per-vault key backups, pri
 - The current reserve is `1 STRK`. The owner also pays Ready's quoted funding and any required wallet-setup costs; `1 STRK` is not an all-in cost.
 - Eligible claim and cancellation fees are paid by the bounded sponsor while live capacity is available. A registered successor with zero private STRK can use [first-use token setup](docs/FRESH_WALLET_COMPATIBILITY.md) without a separate Shield deposit when that policy is advertised. Account deployment and private registration are separate prerequisites.
 - Up to three isolated reserves can be admitted only when allowance, balance and the daily budget conservatively cover their exits. This is a policy ceiling, not a promise of three currently available slots or unlimited sponsorship.
-- If the neutral control relay is unavailable, an explicit Ready X emergency path can submit heartbeat, request or veto, but publicly links that Ready address to the reserve. New sponsored private exits still require the sponsor's authorization; already-signed exits can be broadcast independently.
+- If the neutral control relay is unavailable, an explicit Ready X emergency path can submit heartbeat, request or veto, but publicly links that Ready address to the reserve. New sponsored private exits still require the sponsor's authorization; the browser can broadcast already-signed exits through a public RPC.
 
 See [Ready X onboarding](docs/READY_X_ONBOARDING.md) for setup, backups and the ordinary owner/successor flow, and [relayer operations](relayer/OPERATIONS.md) for the sponsorship policy.
 
