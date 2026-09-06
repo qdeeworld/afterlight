@@ -159,6 +159,12 @@ is user-confirmed. Neither the synthetic tests nor that completion establish
 compatibility with every wallet variant or a same-token relationship for
 encrypted setup.
 
+During that test, the users encountered the preparation and first-use setup
+issues documented above. Product fixes shipped before the users completed
+recovery themselves. This record verifies successful settlement for the
+reported case; it is not an evaluation of onboarding without product-team
+support.
+
 The owner still pays the reserve principal and Ready's quoted funding and
 wallet-setup costs. Sponsored exit/setup support is conditional on the live
 health policy and available capacity; private registration is not made free by

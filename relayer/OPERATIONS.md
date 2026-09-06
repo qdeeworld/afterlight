@@ -135,12 +135,26 @@ fees. New admission pauses when the remaining backing is insufficient.
    quotes or spending instructions. Apply the daily budget and liability checks
    as well.
 4. Within explicit funding and transaction authority, replenish the existing
-   sponsor account and, if needed, restore only the required pool allowance in
-   exact `6 STRK` increments. Never approve unlimited allowance or exceed the
+   sponsor account. Before submitting an allowance change from that account,
+   set `SUBMIT_ENABLED=false`, deploy the configuration-only maintenance change
+   and verify that the live endpoint reports submission disabled. Keep read-only
+   state and receipt checks available. Wait for in-flight requests to finish and
+   reconcile every active `RESERVED`/`SUBMITTED` operation, retained signed
+   artifact and funding lease. Confirm the shared nonce lane is drained and
+   public RPC account nonces agree before signing the approval. Never clear a
+   reservation or discard a signed artifact merely to make maintenance proceed.
+   An allowance approval outside the ledger must not race a control or exit
+   using the same account nonce; a snapshot while submission remains enabled is
+   insufficient. Then restore only the required pool allowance in exact
+   `6 STRK` increments. Never approve unlimited allowance or exceed the
    `60 STRK` allowance ceiling, funded balance, daily budget or per-call caps.
    Do not use an owner/successor wallet to fund the neutral account in a way that
    contradicts the documented privacy boundary. No contract redeployment is needed.
 5. After successful receipts, re-read allowance, balance, liability and health.
+   Reconcile the approval's nonce and fee, then restore submission only when no
+   operation remains ambiguous and all configuration, backing and ledger checks
+   pass. Verify ready production health after re-enabling submission; a planned
+   maintenance pause is not a reason to weaken the health predicate.
    Keep the UI's admission guards intact until current checks pass. Preserve
    backed capacity for real use; do not consume it on a repeat demo merely to
    check readiness.
