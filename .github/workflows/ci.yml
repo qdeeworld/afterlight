@@ -94,6 +94,12 @@ jobs:
 
       - run: npm ci
       - run: npm test
+      - name: Verify SDK archive and separate consumer
+        run: |
+          npm run test:package
+          sdk_package_dir="$(mktemp -d)"
+          npm pack --ignore-scripts --pack-destination "$sdk_package_dir"
+          node ../examples/recovery-integration/verify.mjs "$sdk_package_dir/afterlight-recovery-0.1.0.tgz"
       - run: npm audit --audit-level=high
 
   relayer:

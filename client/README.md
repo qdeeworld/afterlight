@@ -1,12 +1,92 @@
-# Afterlight client and local operator primitives
+# @afterlight/recovery
 
-This package contains deterministic application-key, authorization, relay-schema,
+Typed ESM primitives for Afterlight recovery: application keys and backups,
+Cairo-compatible authorization hashes, STRK20 funding and exit actions, relay
+payloads, and structural exit preflight. Version `0.1.0` packages the existing
+client implementation without changing its behavior.
+
+## Install from a local package
+
+From the repository's `client/` directory, using Node.js `22.13.1` or newer:
+
+```sh
+npm ci
+npm pack
+```
+
+Then, in a separate ESM application:
+
+```sh
+npm install --ignore-scripts /absolute/path/to/afterlight-recovery-0.1.0.tgz
+```
+
+The package is installable from its tarball; these instructions do not assume an
+npm registry publication. `npm pack` builds only the SDK. The tarball contains
+compiled JavaScript, TypeScript declarations, this README, the package manifest,
+and the MIT license. It has no install-time hooks, operator tools, tests, local
+configuration, or credentials.
+
+```ts
+import { felt, type FeltInput } from "@afterlight/recovery";
+import { setupAuthorizationHash } from "@afterlight/recovery/setup-authorization";
+
+const vaultId: FeltInput = 123n;
+console.log(felt(vaultId)); // "0x7b"
+// Synthetic digest: demonstrates the pinned setup-consent hash only.
+console.log(setupAuthorizationHash("00".repeat(32)));
+```
+
+All exports are available from `@afterlight/recovery`. Narrow imports are also
+available at `/actions`, `/encoding`, `/exit-preflight`, `/keys`, `/messages`,
+`/relay`, and `/setup-authorization`. ESM JavaScript and TypeScript are supported;
+there is no CommonJS entrypoint. Runtime dependencies are pinned to
+`starknet@10.7.0` and `@starknet-io/types-js@0.10.4-beta.2`. Browser bundlers can use
+the same modules; key generation and encrypted backups require secure-context
+Web Crypto (`crypto.getRandomValues` and `crypto.subtle`).
+
+See the repository's [integration guide](https://github.com/qdeeworld/afterlight/blob/main/docs/RECOVERY_SDK.md)
+and [installed consumer example](https://github.com/qdeeworld/afterlight/tree/main/examples/recovery-integration)
+for the contract interface and local integration checks.
+
+## Integration limits
+
+These primitives assemble and validate data. Installing or importing the package
+does not connect a wallet, submit a transaction, or grant sponsorship. The caller
+supplies wallet and RPC ports to `PrivateExitPreflight`; invoking those ports can
+contact the caller's configured services. Structural proof-envelope validation
+does not cryptographically verify a proof or establish a successful transaction.
+
+The setup-authorization hash is tied to Afterlight's pinned Mainnet deployment,
+sponsor, pool and STRK token. It is not a configurable consent domain for another
+deployment. The hosted sponsor applies its own origin and policy allowlists;
+another application needs an explicitly supported relay arrangement. Ordinary
+signature checks, fresh contract state, wallet confirmation, fees, and successful
+receipts remain necessary for live recovery. The local consumer example is
+synthetic integration evidence, not an independently completed live recovery.
+
+## Repository development
+
+The sections below describe tools available in a repository checkout, not in the
+installed SDK tarball. To run the local checks from `client/`:
+
+```sh
+npm ci
+npm test
+npm run test:package
+```
+
+`npm run build:sdk` emits only the public modules into `dist/sdk/`. The existing
+`npm run build` also builds the repository's unit-test targets into `dist/`.
+
+### Local operator primitives
+
+The repository also contains deterministic application-key, authorization, relay-schema,
 STRK20 action, structural prepared-exit envelope validation, read-only quote, and explicit local
 operator primitives. It has no public product UI or production storage. Its
 quote, preflight, and operator tools can read Mainnet; only the explicitly labelled
 operator buttons can request a wallet declaration or deployment, and each still
 requires a visible Ready X confirmation. The deployed Mainnet release and its
-five qualifying receipts are recorded in [`../docs/MAINNET.md`](../docs/MAINNET.md).
+five qualifying receipts are recorded in [Mainnet release documentation](https://github.com/qdeeworld/afterlight/blob/main/docs/MAINNET.md).
 
 ```sh
 npm ci

@@ -1,10 +1,79 @@
 {
-  "name": "afterlight-phase-a-client",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@afterlight/recovery",
+  "version": "0.1.0",
+  "description": "Typed Afterlight recovery authorization, relay, and STRK20 action primitives",
+  "license": "MIT",
   "type": "module",
+  "main": "./dist/sdk/index.js",
+  "types": "./dist/sdk/index.d.ts",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22.13.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/qdeeworld/afterlight.git",
+    "directory": "client"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/sdk/index.d.ts",
+      "import": "./dist/sdk/index.js"
+    },
+    "./actions": {
+      "types": "./dist/sdk/actions.d.ts",
+      "import": "./dist/sdk/actions.js"
+    },
+    "./encoding": {
+      "types": "./dist/sdk/encoding.d.ts",
+      "import": "./dist/sdk/encoding.js"
+    },
+    "./exit-preflight": {
+      "types": "./dist/sdk/exit-preflight.d.ts",
+      "import": "./dist/sdk/exit-preflight.js"
+    },
+    "./keys": {
+      "types": "./dist/sdk/keys.d.ts",
+      "import": "./dist/sdk/keys.js"
+    },
+    "./messages": {
+      "types": "./dist/sdk/messages.d.ts",
+      "import": "./dist/sdk/messages.js"
+    },
+    "./relay": {
+      "types": "./dist/sdk/relay.d.ts",
+      "import": "./dist/sdk/relay.js"
+    },
+    "./setup-authorization": {
+      "types": "./dist/sdk/setup-authorization.d.mts",
+      "import": "./dist/sdk/setup-authorization.mjs"
+    }
+  },
+  "files": [
+    "LICENSE",
+    "README.md",
+    "dist/sdk/index.js",
+    "dist/sdk/index.d.ts",
+    "dist/sdk/actions.js",
+    "dist/sdk/actions.d.ts",
+    "dist/sdk/encoding.js",
+    "dist/sdk/encoding.d.ts",
+    "dist/sdk/exit-preflight.js",
+    "dist/sdk/exit-preflight.d.ts",
+    "dist/sdk/keys.js",
+    "dist/sdk/keys.d.ts",
+    "dist/sdk/messages.js",
+    "dist/sdk/messages.d.ts",
+    "dist/sdk/relay.js",
+    "dist/sdk/relay.d.ts",
+    "dist/sdk/setup-authorization.mjs",
+    "dist/sdk/setup-authorization.d.mts"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:sdk": "node scripts/build-sdk.mjs",
+    "prepack": "npm run build:sdk",
+    "test:package": "npm run build:sdk && node --test scripts/package.test.mjs",
     "test": "npm run build && npm run tools:check && npm run operator:build && npm run preflight:build && node --test dist/test/*.test.js",
     "tools:check": "tsc -p tsconfig.tools.json",
     "operator:build": "esbuild tools/mainnet-operator.ts --bundle --format=esm --platform=browser --outfile=tools/mainnet-operator.js",

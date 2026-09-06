@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist/sdk",
+    "noEmitOnError": true,
+    "types": []
+  },
+  "include": ["src/index.ts", "src/setup-authorization.mjs"]
+}
