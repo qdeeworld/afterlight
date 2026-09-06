@@ -8,19 +8,24 @@ An owner privately funds a fixed reserve through STRK20 and remains in control t
 
 [![CI](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml/badge.svg)](https://github.com/qdeeworld/afterlight/actions/workflows/ci.yml)
 
-## Current status
+## Working on Mainnet
 
-**Evidence level: E3 public completion.** The complete recovery mechanism has run through the deployed public app on Starknet Mainnet. Five successful transactions touch both the canonical STRK20 pool and Afterlight. The fresh public Recovery Drill completed private funding, heartbeat, request, veto, a second request, and [exact-note recovery](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6); Ready X then showed the successor's shielded balance increase from `7 STRK` to `8 STRK` while the neutral sponsor paid the pool and network fees.
+**Two independent external users—an owner and a successor—used Afterlight to complete a real recovery on Starknet Mainnet. The successor confirmed receiving the `1 STRK` reserve in their private account.**
 
-**Release status: deployed public Mainnet Recovery Drill.** Afterlight is [deployed on Mainnet](https://starkscan.co/contract/0x06e8b6e49b4366e0dc6a35eee722b417c718988eca3f4a0c298bdf8785261c25). The bounded neutral relayer executed the public control and recovery path without using either Ready role as the outer sender. The public app supports real Ready X connection, local per-vault keys, private funding, live state, relayed controls, exact-note recovery, contextual receipts, and post-claim balance reconciliation.
+The September 5, 2026 claim succeeded on Mainnet, moved the reserve to `CLAIMED`, and reduced its remaining liability to zero.
 
-The public drill is founder-operated E3 evidence. An assisted external owner-successor recovery also succeeded on September 5, 2026: its `CLAIMED` state and zero remaining liability were independently verified, and the user subsequently confirmed `1 STRK` visible in the successor's private account. That private balance is user-reported, not an agent-read measurement. Unassisted cold-user E4 completion is not claimed; the five public receipts and approved demo remain the published evidence set.
+The complete Recovery Drill has also run through the public app: private funding → heartbeat → request → owner veto → second request → [exact-note recovery](https://starkscan.co/tx/0x722033f7fd0397ff4d3845428c98cad885b6a63824f7c78a2b7e1d7d6f5c1b6). Five published successful transactions touch both the canonical STRK20 pool and Afterlight. See the [Mainnet record](docs/MAINNET.md) for the public receipts and verification details.
 
-Neutral sponsorship remains deliberately bounded, but admission is no longer a global one-vault latch. The service admits up to three isolated vaults only when allowance and balance conservatively cover every outstanding exit, accepts allowance only in exact `6 STRK` fee increments, and enforces a fixed daily exit budget. Exit transactions are signed under that policy and returned to the browser for direct RPC broadcast before receipt reconciliation. If the neutral control relay is unavailable, the owner or successor can use an explicit Ready X emergency path; that restores availability but publicly links the Ready address to the vault.
+The public app provides Ready X connection, encrypted per-vault key backups, private funding, live reserve state, heartbeat and veto controls, private recovery, and post-claim balance reconciliation.
 
-The owner funds the `1 STRK` principal and pays Ready's quoted funding and any required wallet-setup costs; `1 STRK` is not an all-in cost. Eligible claim and cancellation fees are paid by the bounded sponsor while live capacity is available. A registered successor with zero private STRK can use the [consented first-use token setup](docs/FRESH_WALLET_COMPATIBILITY.md) without a separate Shield deposit when that policy is advertised. Account deployment and private registration remain separate prerequisites, and sponsorship is not a permanent fee-free or availability guarantee.
+## Costs and availability
 
-Application-key backups use password-based PBKDF2 with `600,000` SHA-256 iterations and AES-256-GCM authenticated encryption. Existing version 1 plaintext backups can be imported only for migration and must be replaced before funding.
+- The current reserve is `1 STRK`. The owner also pays Ready's quoted funding and any required wallet-setup costs; `1 STRK` is not an all-in cost.
+- Eligible claim and cancellation fees are paid by the bounded sponsor while live capacity is available. A registered successor with zero private STRK can use [first-use token setup](docs/FRESH_WALLET_COMPATIBILITY.md) without a separate Shield deposit when that policy is advertised. Account deployment and private registration are separate prerequisites.
+- Up to three isolated reserves can be admitted only when allowance, balance and the daily budget conservatively cover their exits. This is a policy ceiling, not a promise of three currently available slots or unlimited sponsorship.
+- If the neutral control relay is unavailable, an explicit Ready X emergency path can submit heartbeat, request or veto, but publicly links that Ready address to the reserve. New sponsored private exits still require the sponsor's authorization; already-signed exits can be broadcast independently.
+
+See [Ready X onboarding](docs/READY_X_ONBOARDING.md) for setup, backups and the ordinary owner/successor flow, and [relayer operations](relayer/OPERATIONS.md) for the sponsorship policy.
 
 ## Recovery flow
 
@@ -57,12 +62,27 @@ Afterlight does not claim legal inheritance, invisible authorization keys, proof
 - `docs/READY_X_ONBOARDING.md` — Ready X prerequisites and owner/successor flow
 - `docs/MAINNET.md` — pinned Mainnet dependencies, deployed artifacts, and transaction evidence
 
+## Build on Afterlight
+
+The same recovery primitives are available as **`@afterlight/recovery`**, a typed
+ESM package with application keys, encrypted backups, authorization hashes,
+STRK20 action builders and exit validation. Install it from the package archive;
+no npm registry publication is assumed.
+
+Start with the [SDK integration guide](docs/RECOVERY_SDK.md),
+[separate installed-package example](examples/recovery-integration/README.md),
+and public [`IAfterlight` Cairo interface](src/afterlight.cairo). The example runs
+locally without a wallet or transaction. A live application still needs its own
+supported wallet and relay arrangement; SDK installation does not grant access
+to Afterlight's bounded sponsor.
+
 ## Design documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Ready X onboarding](docs/READY_X_ONBOARDING.md)
 - [Mainnet release and evidence](docs/MAINNET.md)
+- [Recovery SDK and Cairo integration](docs/RECOVERY_SDK.md)
 - [Neutral relayer operations](relayer/OPERATIONS.md)
 
 ## Build and test
@@ -73,8 +93,8 @@ Prerequisites:
 - Starknet Foundry `0.62.1`
 - Node.js `22.13.1`
 
-These are the exact versions exercised by CI. All three npm packages have committed
-lockfiles and must be installed with `npm ci`, not `npm install`.
+These are the exact versions exercised by CI. The application packages and the
+integration example have committed lockfiles and use `npm ci` for verification.
 
 ```bash
 scarb build
@@ -85,6 +105,7 @@ npm --prefix client ci
 npm --prefix client run verify:locked-artifacts
 npm --prefix client run verify:mainnet
 npm --prefix client test
+npm --prefix client run test:package
 
 npm --prefix relayer ci
 npm --prefix relayer run check

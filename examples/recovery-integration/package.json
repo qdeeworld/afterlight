@@ -1,0 +1,17 @@
+{
+  "name": "afterlight-recovery-consumer-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc -p tsconfig.json && esbuild src/prepare-control.ts --bundle --format=esm --platform=browser --outfile=dist/browser.js && node --test dist/recovery.test.js"
+  },
+  "dependencies": {
+    "@afterlight/recovery": "file:./afterlight-recovery.tgz"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.3"
+  }
+}
