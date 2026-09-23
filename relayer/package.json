@@ -18,11 +18,11 @@
     "starknet": "10.7.0"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.0.0",
+    "@cloudflare/vitest-plugin": "^1.2.4",
     "@types/node": "26.2.0",
     "oxlint": "1.79.0",
     "typescript": "5.9.3",
     "vitest": "4.1.11",
-    "wrangler": "^4.127.1"
+    "wrangler": "^4.137.0"
   }
 }
