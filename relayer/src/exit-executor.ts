@@ -69,6 +69,10 @@ export function isFirstUseSetupEnabled(value: string): boolean {
   return value === "true";
 }
 
+function isSubmissionEnabled(value: string): boolean {
+  return value === "true";
+}
+
 export class ExitExecutorError extends Error {
   constructor(readonly code: "invalid_exit" | "exit_unavailable" | "exit_busy" | "exit_uncertain" | "exit_reverted") {
     super(code);
@@ -365,7 +369,7 @@ export async function executePreparedExit(
         validateStoredSignedExit(signedTransaction, validated, prior.transactionHash);
         return reconcileSubmittedExit(provider, budget, validated, prior.transactionHash);
       }
-      if (env.SUBMIT_ENABLED !== "true" || (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED))) {
+      if (!isSubmissionEnabled(env.SUBMIT_ENABLED) || (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED))) {
         return { status: "duplicate", transactionHash: prior.transactionHash };
       }
       const takeover = await budget.takeoverPrepared(
@@ -412,7 +416,7 @@ export async function executePreparedExit(
   // The kill switch blocks every fresh signature and broadcast, but cannot
   // strand a transaction already recorded as SUBMITTED. Receipt-only
   // reconciliation above is safe while submission is disabled.
-  if (env.SUBMIT_ENABLED !== "true") throw new ExitExecutorError("exit_unavailable");
+  if (!isSubmissionEnabled(env.SUBMIT_ENABLED)) throw new ExitExecutorError("exit_unavailable");
   if (validated.hasSetup && !isFirstUseSetupEnabled(env.FIRST_USE_SETUP_ENABLED)) throw new ExitExecutorError("exit_unavailable");
   try {
     if (normalizeHex(await provider.getChainId()) !== normalizeHex(EXIT_POLICY.chainId)) throw new Error("wrong_chain");
